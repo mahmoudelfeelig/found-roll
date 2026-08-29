@@ -17,8 +17,8 @@
     "truthful_mode_confirmed": true
   },
   "google_cloud": {
-    "project_id": "<google-cloud-project-id>",
-    "dedicated_project_confirmed": false,
+    "project_id": "found-roll-agentic-20260830",
+    "dedicated_project_confirmed": true,
     "billing_enabled_confirmed": false,
     "required_apis_enabled_confirmed": false,
     "iam_ready_confirmed": false,
