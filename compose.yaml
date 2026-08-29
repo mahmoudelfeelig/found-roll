@@ -1,0 +1,56 @@
+services:
+  simulator:
+    build:
+      context: ./simulator
+    environment:
+      PORT: "8080"
+      SIMULATOR_ENV: development
+      SIMULATOR_API_KEY: local-simulator-api-key-change-me
+      SIMULATOR_TOKEN_SECRET: local-simulator-token-secret-change-me
+      SIMULATOR_CALLBACK_SECRET: local-simulator-callback-secret-change-me
+    ports:
+      - "8091:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      simulator:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      FOUND_ROLL_ENV: development
+      FOUND_ROLL_REPOSITORY: memory
+      FOUND_ROLL_ANALYST_MODE: fixture
+      FOUND_ROLL_INVENTORY_MODE: http
+      FOUND_ROLL_INVENTORY_BASE_URL: http://simulator:8080
+      FOUND_ROLL_INVENTORY_TIMEOUT_SECONDS: "3.0"
+      FOUND_ROLL_RELAY_MODE: http
+      FOUND_ROLL_TASKS_MODE: inline
+      FOUND_ROLL_MODEL: gemini-3.5-flash
+      FOUND_ROLL_DEMO_MODE: "true"
+      FOUND_ROLL_RELAY_BASE_URL: http://simulator:8080
+      FOUND_ROLL_RELAY_API_KEY: local-simulator-api-key-change-me
+      FOUND_ROLL_RELAY_SHARED_SECRET: local-simulator-callback-secret-change-me
+      FOUND_ROLL_SECRET_PEPPER: local-found-roll-pepper-change-me
+      FOUND_ROLL_DEMO_ACCESS_TOKEN: local-found-roll-demo-access-token-change-me
+      FOUND_ROLL_ADMIN_TOKEN: local-found-roll-admin-recovery-token-change-me
+      FOUND_ROLL_EVIDENCE_STAFF_TOKEN: local-found-roll-evidence-staff-token-change-me
+      FOUND_ROLL_SUPERVISOR_TOKEN: local-found-roll-supervisor-approval-token-change-me
+      FOUND_ROLL_STAFF_ACTOR_ID: staff.northport
+      FOUND_ROLL_SUPERVISOR_ACTOR_ID: supervisor.northport
+      FOUND_ROLL_ALLOWED_ORIGINS: http://127.0.0.1:8080,http://localhost:8080
+      FOUND_ROLL_PUBLIC_BASE_URL: http://app:8080
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12

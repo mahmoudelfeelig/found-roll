@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+node_modules
+dist
+artifacts
+evaluation/results.json
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+*.log
+.env
+.env.*
+service/.local
+simulator/.local

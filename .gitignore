@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.vite/
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+.env
+.env.*
+!.env.example
+artifacts/private/
+# Historical local design captures can contain synthetic proof answers or QR
+# credentials. Regenerate publication screenshots from the frozen release.
+artifacts/design-qa/
+
+*.log
+.DS_Store
+Thumbs.db
+
+# Local state and credentials must never be committed.
+service/.local/
+simulator/.local/
+*.jsonl.local
+service-account*.json
+application_default_credentials.json

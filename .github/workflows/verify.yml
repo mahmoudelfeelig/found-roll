@@ -1,0 +1,100 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-contracts:
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out submitted source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Use Node.js 24.11.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.11.0"
+          cache: npm
+          package-manager-cache: true
+
+      - name: Use Python 3.13.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.13"
+          cache: pip
+          cache-dependency-path: |
+            service/requirements-dev.lock
+            simulator/requirements-dev.lock
+
+      - name: Install JavaScript dependencies
+        shell: pwsh
+        run: npm ci --no-audit --no-fund
+
+      - name: Install custody service dependencies
+        shell: pwsh
+        run: |
+          python -m venv service/.venv
+          service/.venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r service/requirements-dev.lock
+
+      - name: Install simulator dependencies
+        shell: pwsh
+        run: |
+          python -m venv simulator/.venv
+          simulator/.venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r simulator/requirements-dev.lock
+
+      - name: Run the complete local gate
+        shell: pwsh
+        run: ./scripts/verify-all.ps1
+
+      - name: Confirm no credential files were created
+        shell: pwsh
+        run: |
+          $forbidden = Get-ChildItem -Recurse -File -Include *.pem,*.p12,*.pfx,service-account*.json -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]|[\\/]\.venv[\\/]' }
+          if ($forbidden) {
+            $forbidden | ForEach-Object { Write-Error "Forbidden credential-like file: $($_.FullName)" }
+            exit 1
+          }
+
+  linux-container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out submitted source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build app and simulator images
+        run: |
+          docker build --tag found-roll-app-ci .
+          docker build --tag found-roll-simulator-ci ./simulator
+
+      - name: Start immutable smoke containers
+        run: |
+          docker run --detach --name found-roll-app-ci --read-only --tmpfs /tmp --publish 18080:8080 found-roll-app-ci
+          docker run --detach --name found-roll-simulator-ci --read-only --tmpfs /tmp --publish 18091:8080 found-roll-simulator-ci
+
+      - name: Verify container health and packaged client
+        run: |
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:18080/healthz
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:18080/
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:18091/healthz
+          docker inspect --format '{{json .State.Health}}' found-roll-app-ci
+
+      - name: Preserve container diagnostics
+        if: always()
+        continue-on-error: true
+        run: |
+          docker logs found-roll-app-ci
+          docker logs found-roll-simulator-ci
+          docker rm --force found-roll-app-ci found-roll-simulator-ci

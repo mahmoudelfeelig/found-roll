@@ -1,0 +1,69 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-frontend-build",
+  "entrypoint": "dist/client/index.html",
+  "file_count": 12,
+  "total_bytes": 2563407,
+  "files": [
+    {
+      "path": "dist/client/assets/README.md",
+      "bytes": 1816,
+      "sha256": "f822af9a3d20432e9e6cf9197158beb4b6dab6e0c6cd313d6e0f6c7e56bf6088"
+    },
+    {
+      "path": "dist/client/assets/claimant-match.jpg",
+      "bytes": 303802,
+      "sha256": "e5f8f907e9fcc2e21415b41218faea6ef11f783827aa6409aaba32defb6e64ed"
+    },
+    {
+      "path": "dist/client/assets/index-CfxhpD1R.css",
+      "bytes": 32718,
+      "sha256": "454df6482a14cacde35f2fc5802652905151c13d4df79c71a02c10d4004942ec"
+    },
+    {
+      "path": "dist/client/assets/index-D43LV_zI.js",
+      "bytes": 403367,
+      "sha256": "9110f1529532115490ea34dc2178be6f660edd5f833e063b871442fc87f72ec9"
+    },
+    {
+      "path": "dist/client/assets/northport-intake.jpg",
+      "bytes": 404870,
+      "sha256": "460bce72c0d68f8f26ae7f5f4d03b6cfc8975f239815580de511be3933d062ed"
+    },
+    {
+      "path": "dist/client/assets/pouch-front.jpg",
+      "bytes": 326943,
+      "sha256": "7eecc012b0f8638fc59f2979ea0cdd3888e6cf5e9659eea2f30f0388bcea6d42"
+    },
+    {
+      "path": "dist/client/assets/pouch-interior.jpg",
+      "bytes": 329913,
+      "sha256": "5a2dc95289981af12a057c3754d5df6140b67de842dc803a5092f5e9d1fb6b1e"
+    },
+    {
+      "path": "dist/client/assets/pouch-rear.jpg",
+      "bytes": 347067,
+      "sha256": "1768db7c0249316c55877a73d91bd09689118f800e7a40ff339d2cfea6a6b159"
+    },
+    {
+      "path": "dist/client/assets/pouch-serial-detail.jpg",
+      "bytes": 406635,
+      "sha256": "7189901bb01d2130f18fc96f17a86529254a4a5e789c043a225993a6ee191a6d"
+    },
+    {
+      "path": "dist/client/index.html",
+      "bytes": 563,
+      "sha256": "262afdf84308e44d803dc3535ddc64e69bff5c351bc5501f7c8ae55ebb7355c2"
+    },
+    {
+      "path": "dist/client/legal/FOUND-ROLL-LICENSE.txt",
+      "bytes": 1301,
+      "sha256": "30dccf1ca6baa25ccba0cd4699e5d66f405c221c34624ca1cdd3699878b86a92"
+    },
+    {
+      "path": "dist/client/legal/THIRD-PARTY-LICENSES.txt",
+      "bytes": 4412,
+      "sha256": "66fd36c286d434bd1c72293b9d4b25e54c11921432361bccbaf91a846ab3fd36"
+    }
+  ]
+}

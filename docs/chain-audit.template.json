@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-chain-audit",
+  "status": "BLOCKED",
+  "run_id": "<canonical-run-id>",
+  "case_id": "<case-id>",
+  "workflow_epoch": "<workflow-epoch>",
+  "submitted_commit": "<submitted-commit>",
+  "tree_sha": "<submitted-tree>",
+  "manifest": {
+    "schema_version": "1",
+    "manifest_id": "<manifest-id>",
+    "case_id": "<case-id>",
+    "final_state": "CLOSED",
+    "final_version": 0,
+    "event_count": 0,
+    "first_event_hash": "<first-event-hash>",
+    "final_event_hash": "<final-event-hash>",
+    "event_ids": [],
+    "evidence_digests": [],
+    "internally_consistent": false,
+    "physical_transfer_proven": false,
+    "disclosure": "This application-enforced manifest checks service event consistency. It does not prove physical possession or a real-world transfer."
+  },
+  "events": []
+}

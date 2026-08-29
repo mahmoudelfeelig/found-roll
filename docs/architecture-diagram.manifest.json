@@ -1,0 +1,11 @@
+{
+  "schema_version": "1",
+  "renderer": "@mermaid-js/mermaid-cli@11.16.0",
+  "source": "architecture-diagram.mmd",
+  "source_sha256": "3d8cd70460457dae3c29cbdc086c8b51c5e6ff38482ccec4b4be13019b252c7c",
+  "render": "architecture-diagram.png",
+  "render_sha256": "3a8705c4b4206a65819eb4b400042e1cbf121d3dbb579b649ace044471d58f04",
+  "width": 3568,
+  "height": 1610,
+  "background": "white"
+}

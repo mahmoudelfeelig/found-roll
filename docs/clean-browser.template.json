@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-clean-browser",
+  "status": "BLOCKED",
+  "verified_at_utc": "<verified-at-utc>",
+  "submitted_commit": "<submitted-commit>",
+  "hosted_url": "https://replace.example.invalid",
+  "app_revision": "<app-cloud-run-revision>",
+  "simulator_revision": "<simulator-cloud-run-revision>",
+  "frontend_manifest_sha256": "<frontend-build-manifest-sha256>",
+  "judge_access_verified": false,
+  "current_rendered_design_verified": false
+}

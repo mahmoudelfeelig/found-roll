@@ -1,0 +1,22 @@
+{
+  "case_id": "FR-20260829-0042",
+  "completed_at": "2026-08-29T13:00:25.489614+00:00",
+  "event_count": 19,
+  "final_event_hash": "08bd9c0188865080365aa4d8e357bba93e7132c9b7c1b8909215ee173c287481",
+  "final_state": "CLOSED",
+  "final_version": 19,
+  "manifest_id": "manifest-4fda4c92d074d87cbaa0d22b",
+  "outbox_replay_idempotent": true,
+  "physical_transfer_proven": false,
+  "result": "passed",
+  "service_execution": {
+    "analyst_mode": "fixture",
+    "model_name": "deterministic-fixture-no-model",
+    "relay_mode": "http",
+    "repository": "memory",
+    "tasks_mode": "inline"
+  },
+  "simulator_fixture_version": "camera-pouch-v1",
+  "started_at": "2026-08-29T13:00:22.978458+00:00",
+  "token_replay_rejected": true
+}

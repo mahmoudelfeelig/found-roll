@@ -1,0 +1,147 @@
+{
+  "schema_version": "2.0",
+  "suite_id": "found-roll-local-safety-v2",
+  "execution_boundary": {
+    "repository": "in-memory",
+    "analyst": "deterministic FixtureCaseAnalyst",
+    "tasks": "inline",
+    "relay": "in-process FixtureRelayGateway except the injected ambiguity case",
+    "network": "FastAPI TestClient in-process",
+    "gemini_calls": 0,
+    "google_cloud_calls": 0,
+    "claim": "Local deterministic policy, domain, API, idempotency, and privacy behavior only."
+  },
+  "fixtures": [
+    {
+      "id": "FR-001",
+      "title": "Complete synthetic valuable-item workflow",
+      "runner": "full_happy_path",
+      "implemented_surface": ["custody service", "state machine", "policy", "fixture analyst", "inline outbox", "fixture relay", "event manifest"],
+      "expected_assertions": ["final state is CLOSED", "manifest recomputes", "physical transfer remains unproven", "completed release task replay appends no event"],
+      "not_covered": ["Gemini", "Google ADK trajectory", "Cloud Tasks delivery", "Firestore", "Cloud Run", "HTTP simulator"]
+    },
+    {
+      "id": "FR-002",
+      "title": "Custody graph accepts declared edges and blocks release skips",
+      "runner": "state_graph",
+      "implemented_surface": ["state machine"],
+      "expected_assertions": ["all declared transitions pass", "unsafe direct transitions to RELEASED fail"],
+      "not_covered": ["concurrent Firestore transactions"]
+    },
+    {
+      "id": "FR-003",
+      "title": "Visual-only evidence cannot authorize handoff",
+      "runner": "visual_only_policy",
+      "implemented_surface": ["release policy"],
+      "expected_assertions": ["outcome is REQUEST_EVIDENCE", "private evidence missing reason is present"],
+      "not_covered": ["live multimodal ranking quality"]
+    },
+    {
+      "id": "FR-004",
+      "title": "Valuable-item human gates are ordered",
+      "runner": "valuable_human_gates",
+      "implemented_surface": ["release policy"],
+      "expected_assertions": ["missing identity requires review", "missing approval requires review", "both gates allow simulated handoff"],
+      "not_covered": ["production identity provider", "credential issuance and rotation"]
+    },
+    {
+      "id": "FR-005",
+      "title": "Sensitive property remains outside ordinary relay",
+      "runner": "sensitive_policy",
+      "implemented_surface": ["release policy"],
+      "expected_assertions": ["outcome is DENY", "specialist policy reason is present"],
+      "not_covered": ["operator-specific specialist integration"]
+    },
+    {
+      "id": "FR-006",
+      "title": "Dangerous pre-intake creates no case or model work",
+      "runner": "dangerous_pre_intake",
+      "implemented_surface": ["intake API", "safety boundary"],
+      "expected_assertions": ["request is not accepted", "no record is created", "model_called is false", "passport count is unchanged"],
+      "not_covered": ["venue emergency procedures"]
+    },
+    {
+      "id": "FR-007",
+      "title": "Four wrong private answers force manual review without answer echo",
+      "runner": "wrong_answer_review",
+      "implemented_surface": ["claim-evidence API", "policy", "event responses"],
+      "expected_assertions": ["fourth attempt reaches MANUAL_REVIEW", "restricted answer and digest field names are absent from public events"],
+      "not_covered": ["distributed rate limiting"]
+    },
+    {
+      "id": "FR-008",
+      "title": "Deterministic ranking, bounded local ADK contract, and useful abstention",
+      "runner": "fixture_analyst_canonical",
+      "implemented_surface": ["FixtureCaseAnalyst", "typed AnalysisProposal"],
+      "expected_assertions": ["canonical candidate is in the top three", "claim acceptance remains false", "question is non-leading and locally useful", "restricted values stay excluded", "offline ADK construction exposes only five proposal tools, typed output, single-turn mode, and an eight-call cap"],
+      "not_covered": ["Gemini invocation", "live ADK trajectory", "model variance", "real image understanding"]
+    },
+    {
+      "id": "FR-009",
+      "title": "Route conflict hard-filters the otherwise strongest candidate",
+      "runner": "fixture_analyst_route_conflict",
+      "implemented_surface": ["FixtureCaseAnalyst", "candidate hard filters"],
+      "expected_assertions": ["route-incompatible candidate is not selected", "eligible runner-up is in the top three and selected", "claim acceptance remains false", "one useful private discriminator is proposed"],
+      "not_covered": ["Gemini", "ADK", "external adapter authorization"]
+    },
+    {
+      "id": "FR-010",
+      "title": "No eligible candidate fails safely",
+      "runner": "fixture_analyst_no_eligible",
+      "implemented_surface": ["FixtureCaseAnalyst", "candidate hard filters"],
+      "expected_assertions": ["no_eligible_candidates is returned", "no candidate is invented", "safe failure without a structured next-evidence proposal is scored not useful"],
+      "not_covered": ["live adapter timeout behavior"]
+    },
+    {
+      "id": "FR-011",
+      "title": "Stale case version is rejected without a mutation",
+      "runner": "stale_case_version",
+      "implemented_surface": ["claim-evidence API", "repository expected-version guard"],
+      "expected_assertions": ["HTTP 409 stale_case_version", "event count is unchanged"],
+      "not_covered": ["Firestore cross-process contention"]
+    },
+    {
+      "id": "FR-012",
+      "title": "Duplicate analysis task is idempotent",
+      "runner": "duplicate_analysis_task",
+      "implemented_surface": ["outbox", "inline task handler", "idempotency records"],
+      "expected_assertions": ["first delivery completes", "second delivery reports replay", "event count is unchanged"],
+      "not_covered": ["Google-signed OIDC", "Cloud Tasks at-least-once delivery"]
+    },
+    {
+      "id": "FR-013",
+      "title": "Prompt injection is inert and publication surfaces exclude restricted data",
+      "runner": "publication_privacy",
+      "implemented_surface": ["opaque task payload", "staff-authenticated response models", "publication artifact capture"],
+      "expected_assertions": ["untrusted description instructions do not alter ranking or authorize a claim", "one bounded discriminator remains useful", "task payload contains identifiers only", "staff/publication surfaces omit the private answer and restricted digest/token fields"],
+      "not_covered": ["Cloud Logging", "OpenTelemetry export", "browser bundle scan is reported separately"]
+    },
+    {
+      "id": "FR-014",
+      "title": "Expired claimant links and consumed handoff credentials fail closed",
+      "runner": "token_replay",
+      "implemented_surface": ["token issuance", "token consumption", "repository transaction"],
+      "expected_assertions": ["expired claimant link returns claim_link_expired and appends no event", "first handoff presentation succeeds", "replay returns token_replayed", "replay appends no event", "raw credentials are never written to results"],
+      "not_covered": ["remote simulator token store", "clock-skew behavior"]
+    },
+    {
+      "id": "FR-015",
+      "title": "Ambiguous relay outcome enters reconciliation and will not auto-retry",
+      "runner": "ambiguous_relay_reconciliation",
+      "implemented_surface": ["release outbox", "failure transition", "reconciliation guard"],
+      "expected_assertions": ["ambiguous response reaches RECONCILIATION_REQUIRED", "outbox is FAILED", "automatic retry is rejected", "relay is called once"],
+      "not_covered": ["real network timeout", "remote reconciliation query", "Cloud Tasks retry scheduler"]
+    }
+  ],
+  "live_only_requirements": [
+    "Live gemini-3.5-flash invocation through Vertex AI",
+    "Google ADK tool trajectory and trace receipt",
+    "Cloud Run deployment of app and simulator revisions",
+    "Firestore persistence and real transaction contention",
+    "Cloud Storage evidence-object generation and digest provenance",
+    "Cloud Tasks OIDC delivery and at-least-once retry",
+    "Authenticated HTTP simulator request and signed callback artifact over deployed HTTPS",
+    "Cloud Logging and trace privacy export",
+    "Five fresh canonical reset-to-close runs"
+  ]
+}

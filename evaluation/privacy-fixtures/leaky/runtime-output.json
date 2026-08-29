@@ -1,0 +1,5 @@
+{
+  "case_id": "FR-SYNTHETIC-LEAK-TEST",
+  "unsafe_private_value": "FR-LEAK-CANARY-7Q2M9X",
+  "unsafe_credential_uri": "found-roll://case/claimant/TEST-CREDENTIAL-123456"
+}

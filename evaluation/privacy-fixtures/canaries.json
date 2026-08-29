@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "description": "Digest-only synthetic scanner self-test canary. The raw canary exists only in the deliberately leaky fixture.",
+  "canaries": [
+    {
+      "id": "self-test-restricted-canary",
+      "sha256": "e9863e5bbb484673752da3daac3f7f4ef8be7cede000f4c9702b0b622bb96ca7",
+      "length": 21,
+      "normalization": "exact UTF-8 text"
+    }
+  ],
+  "patterns": [
+    {
+      "id": "embedded-demo-credential-uri",
+      "regex": "found-roll://[^\\\"'\\s]+/(?:claimant|custodian)/[^\\\"'\\s]+"
+    },
+    {
+      "id": "restricted-storage-field",
+      "regex": "(?i)\\\"(?:restricted_value_hash|claimant_token_hash|custodian_token_hash)\\\"\\s*:"
+    }
+  ]
+}

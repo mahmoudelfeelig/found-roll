@@ -1,0 +1,73 @@
+{
+  "execution_boundary": {
+    "analyst": "deterministic FixtureCaseAnalyst",
+    "claim": "Local deterministic policy, domain, API, idempotency, and privacy behavior only.",
+    "gemini_calls": 0,
+    "google_cloud_calls": 0,
+    "network": "FastAPI TestClient in-process",
+    "relay": "in-process FixtureRelayGateway except the injected ambiguity case",
+    "repository": "in-memory",
+    "tasks": "inline"
+  },
+  "failed_count": 0,
+  "fixture_count": 15,
+  "local_fixture_metrics": {
+    "candidate_retrieval_top3_recall": {
+      "denominator": 2,
+      "numerator": 2,
+      "per_fixture": [
+        {
+          "fixture_id": "FR-008",
+          "top3_hit": true
+        },
+        {
+          "fixture_id": "FR-009",
+          "top3_hit": true
+        }
+      ],
+      "required_fixture_count_min": 12,
+      "sample_sufficient": false,
+      "status": "DESCRIPTIVE_PROXY_INSUFFICIENT_SAMPLE",
+      "value": 1.0
+    },
+    "next_evidence_usefulness": {
+      "denominator": 3,
+      "numerator": 3,
+      "per_fixture": [
+        {
+          "fixture_id": "FR-008",
+          "rubric_reason": "one non-leading restricted discriminator is requested while claim acceptance remains false",
+          "useful": true
+        },
+        {
+          "fixture_id": "FR-009",
+          "rubric_reason": "the route-incompatible candidate is excluded and the eligible candidate receives one private discriminator",
+          "useful": true
+        },
+        {
+          "fixture_id": "FR-013",
+          "rubric_reason": "untrusted description text does not change ranking or claim authority and one bounded discriminator remains",
+          "useful": true
+        }
+      ],
+      "rubric": "Useful means a question-bearing labeled candidate packet receives one non-leading private discriminator that separates candidates while claim acceptance remains false.",
+      "status": "DESCRIPTIVE_PROXY_INSUFFICIENT_SAMPLE",
+      "threshold": 0.8,
+      "threshold_evaluated": false,
+      "threshold_passed": null,
+      "value": 1.0
+    },
+    "scope": "Descriptive frozen local deterministic proxies only; the planned 12-15 labeled-fixture and live Gemini/ADK gates remain incomplete.",
+    "trajectory_coverage": {
+      "ambiguous_remote_outcome": "FR-015",
+      "bounded_fixture_proposal": "FR-008",
+      "duplicate_release_task": "FR-001",
+      "duplicate_task_delivery": "FR-012",
+      "live_adk_trajectory_observed": false,
+      "missing_private_evidence": "FR-003"
+    }
+  },
+  "passed_count": 15,
+  "status": "LOCAL_PASS_CANONICAL_INCOMPLETE",
+  "suite_id": "found-roll-local-safety-v2"
+}

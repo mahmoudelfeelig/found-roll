@@ -1,0 +1,17 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-canonical-privacy",
+  "status": "BLOCKED",
+  "submitted_commit": "<submitted-commit>",
+  "run_ids": [
+    "<canonical-run-id-1>",
+    "<canonical-run-id-2>",
+    "<canonical-run-id-3>",
+    "<canonical-run-id-4>",
+    "<canonical-run-id-5>"
+  ],
+  "unresolved_findings": -1,
+  "binary_media_review_confirmed": false,
+  "raw_sensitive_content_included": false,
+  "log_trace_ranges_covered": false
+}

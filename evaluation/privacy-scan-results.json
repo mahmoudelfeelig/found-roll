@@ -1,0 +1,27 @@
+{
+  "canary_count": 9,
+  "decode_replacement_count": 0,
+  "disclosure": "This is a UTF-8 text scan. Unsupported binary files are counted but not content-scanned. Findings contain rule IDs and locations only; canary and matched values are never written or printed.",
+  "finding_count": 0,
+  "finding_values_included": false,
+  "findings_by_rule": {},
+  "manifest_sha256": "298efc430133999d52ef4f39f05bcd3edee8723e5a5db8fc9995a27999dc5375",
+  "pattern_count": 4,
+  "recorded_findings": [],
+  "scanned_byte_count": 647073,
+  "scanned_file_count": 31,
+  "schema_version": "1.0",
+  "scope": [
+    "src",
+    "dist/client",
+    "evaluation/artifacts/publication",
+    "evaluation/results.json",
+    "artifacts/verification"
+  ],
+  "skipped_large_file_count": 0,
+  "status": "PASS",
+  "unsupported_extensions": {
+    ".jpg": 6
+  },
+  "unsupported_file_count": 6
+}

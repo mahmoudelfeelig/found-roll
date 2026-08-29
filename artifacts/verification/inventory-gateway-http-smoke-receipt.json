@@ -1,0 +1,18 @@
+{
+  "authorized_candidate_ids": [
+    "GH-PCH-104",
+    "ML-PCH-219",
+    "NA-PCH-231"
+  ],
+  "authorized_tenant_count": 3,
+  "gateway_mode": "http",
+  "generated_at": "2026-08-29T22:52:13.131700+00:00",
+  "restricted_fields_included": false,
+  "result": "passed",
+  "run_id": "fdfc7ce6-a934-48ac-850b-2784aae98cbd",
+  "schema_version": "1",
+  "simulator_disclosure_required": "SIMULATED",
+  "transport": "real_loopback_http",
+  "unauthorized_candidate_denied": true,
+  "unauthorized_tenant_denied": true
+}

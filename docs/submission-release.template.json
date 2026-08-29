@@ -1,0 +1,179 @@
+{
+  "schema_version": "2",
+  "kind": "found-roll-submission-release",
+  "status": "BLOCKED",
+  "created_at_utc": "<release-created-at-utc>",
+  "category": "Taskmaster",
+  "eligibility": {
+    "entrant_eligible_confirmed": true,
+    "team_eligibility_confirmed": true,
+    "official_rules_accepted_confirmed": true,
+    "ownership_confirmed": true,
+    "third_party_authorizations_confirmed": true,
+    "new_project_confirmed": true
+  },
+  "friction_story": {
+    "mode": "research_informed",
+    "truthful_mode_confirmed": true
+  },
+  "google_cloud": {
+    "project_id": "<google-cloud-project-id>",
+    "dedicated_project_confirmed": false,
+    "billing_enabled_confirmed": false,
+    "required_apis_enabled_confirmed": false,
+    "iam_ready_confirmed": false,
+    "quota_ready_confirmed": false
+  },
+  "hosted_project": {
+    "url": "https://replace.example.invalid",
+    "clean_browser_verified": false,
+    "judge_access_verified": false
+  },
+  "repository": {
+    "url": "https://github.com/replace/found-roll",
+    "commit_sha": "<exact-head-commit>",
+    "tree_sha": "<exact-head-tree>",
+    "release_tag": "<release-tag>",
+    "visibility": "unset",
+    "judge_access_verified": false,
+    "testing_devpost_access_confirmed": false,
+    "google_hackathons_access_confirmed": false,
+    "release_tag_published_confirmed": false
+  },
+  "receipts": {
+    "canonical_runs": [
+      {
+        "run_id": "<canonical-run-id-1>",
+        "ordinal": 1,
+        "preparation_path": "artifacts/private/canonical-preparation-1.json",
+        "preparation_sha256": "<canonical-preparation-1-sha256>",
+        "run_path": "artifacts/private/canonical-run-1.json",
+        "run_sha256": "<canonical-run-1-sha256>",
+        "chain_audit_path": "artifacts/private/canonical-chain-audit-1.json",
+        "chain_audit_sha256": "<canonical-chain-audit-1-sha256>"
+      },
+      {
+        "run_id": "<canonical-run-id-2>",
+        "ordinal": 2,
+        "preparation_path": "artifacts/private/canonical-preparation-2.json",
+        "preparation_sha256": "<canonical-preparation-2-sha256>",
+        "run_path": "artifacts/private/canonical-run-2.json",
+        "run_sha256": "<canonical-run-2-sha256>",
+        "chain_audit_path": "artifacts/private/canonical-chain-audit-2.json",
+        "chain_audit_sha256": "<canonical-chain-audit-2-sha256>"
+      },
+      {
+        "run_id": "<canonical-run-id-3>",
+        "ordinal": 3,
+        "preparation_path": "artifacts/private/canonical-preparation-3.json",
+        "preparation_sha256": "<canonical-preparation-3-sha256>",
+        "run_path": "artifacts/private/canonical-run-3.json",
+        "run_sha256": "<canonical-run-3-sha256>",
+        "chain_audit_path": "artifacts/private/canonical-chain-audit-3.json",
+        "chain_audit_sha256": "<canonical-chain-audit-3-sha256>"
+      },
+      {
+        "run_id": "<canonical-run-id-4>",
+        "ordinal": 4,
+        "preparation_path": "artifacts/private/canonical-preparation-4.json",
+        "preparation_sha256": "<canonical-preparation-4-sha256>",
+        "run_path": "artifacts/private/canonical-run-4.json",
+        "run_sha256": "<canonical-run-4-sha256>",
+        "chain_audit_path": "artifacts/private/canonical-chain-audit-4.json",
+        "chain_audit_sha256": "<canonical-chain-audit-4-sha256>"
+      },
+      {
+        "run_id": "<canonical-run-id-5>",
+        "ordinal": 5,
+        "preparation_path": "artifacts/private/canonical-preparation-5.json",
+        "preparation_sha256": "<canonical-preparation-5-sha256>",
+        "run_path": "artifacts/private/canonical-run-5.json",
+        "run_sha256": "<canonical-run-5-sha256>",
+        "chain_audit_path": "artifacts/private/canonical-chain-audit-5.json",
+        "chain_audit_sha256": "<canonical-chain-audit-5-sha256>"
+      }
+    ],
+    "canonical_privacy_path": "artifacts/private/canonical-privacy-receipt.json",
+    "canonical_privacy_sha256": "<canonical-privacy-receipt-sha256>",
+    "clean_browser_path": "artifacts/private/clean-browser-receipt.json",
+    "clean_browser_sha256": "<clean-browser-receipt-sha256>"
+  },
+  "frozen_contracts": {
+    "prompt": {
+      "version": "found-roll-case-analyst-prompt-v1",
+      "source_path": "service/app/agent_contract.py",
+      "source_sha256": "<agent-contract-source-sha256>"
+    },
+    "output_schema": {
+      "version": "found-roll-analysis-proposal-v1",
+      "source_path": "service/app/domain.py",
+      "source_sha256": "<domain-source-sha256>"
+    },
+    "policy": {
+      "version": "found-roll-release-v1",
+      "source_path": "service/app/policy.py",
+      "source_sha256": "<policy-source-sha256>"
+    }
+  },
+  "frozen_files": [
+    { "path": "README.md", "sha256": "<readme-sha256>" },
+    { "path": "LICENSE", "sha256": "<license-sha256>" },
+    { "path": "NOTICE.md", "sha256": "<notice-sha256>" },
+    { "path": "THIRD_PARTY_NOTICES.md", "sha256": "<third-party-notices-sha256>" },
+    { "path": "package.json", "sha256": "<package-json-sha256>" },
+    { "path": "package-lock.json", "sha256": "<package-lock-sha256>" },
+    { "path": "public/legal/FOUND-ROLL-LICENSE.txt", "sha256": "<hosted-license-sha256>" },
+    { "path": "public/legal/THIRD-PARTY-LICENSES.txt", "sha256": "<hosted-third-party-licenses-sha256>" },
+    { "path": "service/requirements.lock", "sha256": "<service-runtime-lock-sha256>" },
+    { "path": "service/requirements-dev.lock", "sha256": "<service-dev-lock-sha256>" },
+    { "path": "simulator/requirements.lock", "sha256": "<simulator-runtime-lock-sha256>" },
+    { "path": "simulator/requirements-dev.lock", "sha256": "<simulator-dev-lock-sha256>" },
+    { "path": "public/assets/README.md", "sha256": "<synthetic-media-provenance-sha256>" },
+    { "path": "public/assets/claimant-match.jpg", "sha256": "<claimant-match-asset-sha256>" },
+    { "path": "public/assets/northport-intake.jpg", "sha256": "<northport-intake-asset-sha256>" },
+    { "path": "public/assets/pouch-front.jpg", "sha256": "<pouch-front-asset-sha256>" },
+    { "path": "public/assets/pouch-interior.jpg", "sha256": "<pouch-interior-asset-sha256>" },
+    { "path": "public/assets/pouch-rear.jpg", "sha256": "<pouch-rear-asset-sha256>" },
+    { "path": "public/assets/pouch-serial-detail.jpg", "sha256": "<pouch-serial-detail-asset-sha256>" },
+    { "path": "evaluation/fixtures.json", "sha256": "<evaluation-fixtures-sha256>" },
+    { "path": "evaluation/results.json", "sha256": "<evaluation-results-sha256>" },
+    { "path": "evaluation/privacy-scan-results.json", "sha256": "<publication-privacy-sha256>" },
+    { "path": "evaluation/privacy-scan-docs-results.json", "sha256": "<docs-privacy-sha256>" },
+    { "path": "artifacts/verification/service-client-http-smoke-receipt.json", "sha256": "<local-http-receipt-sha256>" },
+    { "path": "artifacts/verification/frontend-build-manifest.json", "sha256": "<frontend-build-manifest-sha256>" },
+    { "path": "scripts/prepare-canonical-run.ps1", "sha256": "<preparation-script-sha256>" },
+    { "path": "docs/architecture.md", "sha256": "<architecture-document-sha256>" },
+    { "path": "docs/architecture-diagram.manifest.json", "sha256": "<architecture-manifest-sha256>" },
+    { "path": "docs/architecture-diagram.mmd", "sha256": "<architecture-source-sha256>" },
+    { "path": "docs/architecture-diagram.png", "sha256": "<architecture-render-sha256>" },
+    { "path": "docs/deployment.md", "sha256": "<deployment-runbook-sha256>" },
+    { "path": "docs/devpost-submission.md", "sha256": "<devpost-copy-sha256>" },
+    { "path": "docs/demo-script.md", "sha256": "<demo-script-sha256>" }
+  ],
+  "frontend_artifact": {
+    "path": "artifacts/verification/frontend-build-manifest.json",
+    "sha256": "<frontend-build-manifest-sha256>"
+  },
+  "video": {
+    "url": "https://www.youtube.com/watch?v=replace",
+    "duration_seconds": 0,
+    "canonical_run_id": "<filmed-canonical-run-id>",
+    "public_confirmed": false,
+    "english_audio_or_subtitles_confirmed": false,
+    "visible_google_cloud_confirmed": false,
+    "unedited_continuous_live_run_confirmed": false,
+    "privacy_review_confirmed": false
+  },
+  "publication_review": {
+    "current_rendered_design_qa_confirmed": false,
+    "publication_review_confirmed": false,
+    "repository_privacy_review_confirmed": false,
+    "binary_media_review_confirmed": false,
+    "claims_disclosures_consistent_confirmed": false,
+    "synthetic_data_only_confirmed": false
+  },
+  "license": {
+    "decision": "open_source",
+    "spdx_identifier": "MIT"
+  }
+}

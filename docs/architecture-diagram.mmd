@@ -1,0 +1,64 @@
+%%{init: {"theme":"base","flowchart":{"curve":"basis","htmlLabels":true},"themeVariables":{"fontFamily":"Arial, Helvetica, sans-serif","fontSize":"15px","primaryColor":"#eef4fb","primaryTextColor":"#1f2f43","primaryBorderColor":"#6f8eae","lineColor":"#66788a","secondaryColor":"#f4f4f4","tertiaryColor":"#fff8de","clusterBkg":"#f7f8fa","clusterBorder":"#9ca8b4"}}}%%
+flowchart LR
+    Demo["Demo operator<br/>synthetic workflow only"]
+    Staff["Staff operator<br/>identity, evidence, release"]
+    Supervisor["Supervisor<br/>approval only"]
+    Claimant["Claimant<br/>private proof"]
+    Admin["Admin operator / automation<br/>separate admin credential<br/>reset outside browser"]
+
+    subgraph AppRun["Cloud Run: found-roll-app"]
+        StaffWeb["Vintage staff workspace"]
+        ClaimWeb["Private proof page<br/>raw link token: URL fragment<br/>then tab memory only"]
+        API["FastAPI case API<br/>separate credential boundaries"]
+        Policy["Deterministic policy,<br/>custody, tokens, manifest"]
+        Analyst["Bounded Google ADK<br/>Case Analyst"]
+        Recovery["Outbox publisher<br/>and reconciler"]
+        StaffWeb --> API
+        ClaimWeb -->|"one-time claim-link header"| API
+        API --> Policy
+        API --> Analyst
+        Policy --> Recovery
+    end
+
+    subgraph GoogleCloud["Real Google Cloud execution"]
+        Vertex["Vertex AI<br/>Gemini 3.5 Flash"]
+        Firestore[("Firestore<br/>cases, events, outbox,<br/>claim-link digest only")]
+        Storage[("Cloud Storage<br/>private originals and<br/>authorized derivatives")]
+        Tasks["Cloud Tasks<br/>named OIDC delivery"]
+        Logs["Cloud Logging<br/>redacted correlation"]
+        Secrets["Secret Manager"]
+    end
+
+    subgraph SimulatorRun["Cloud Run: found-roll-simulator<br/>PERMANENTLY SIMULATED"]
+        Inventory["Fictional custodian APIs<br/>Grand Hall, Metro Loop,<br/>Northport Air"]
+        Relay["SIMULATED Relay Post<br/>reservation and attestations"]
+    end
+
+    Demo -->|"separate demo credential<br/>synthetic workflow controls"| StaffWeb
+    Staff -->|"staff credential<br/>identity, evidence, release"| StaffWeb
+    Supervisor -->|"supervisor credential<br/>approval only"| StaffWeb
+    Claimant -->|"one-time scoped link"| ClaimWeb
+    Admin --> API
+    Policy -->|"transaction + hash-linked event"| Firestore
+    API -->|"persist keyed digest;<br/>consume once"| Firestore
+    API -->|"private evidence + provenance"| Storage
+    Storage -->|"model-authorized derivative only"| Analyst
+    Analyst -->|"typed model request"| Vertex
+    Analyst -->|"bounded inventory tools over HTTPS"| Inventory
+    Recovery -->|"opaque case_id + outbox_id"| Tasks
+    Tasks -->|"Google-signed OIDC callback"| API
+    Policy -->|"authenticated reservation/release"| Relay
+    Relay -->|"signed SIMULATED attestation"| API
+    API --> Logs
+    Relay --> Logs
+    Secrets -.-> API
+    Secrets -.-> Relay
+
+    classDef person fill:#fff8de,stroke:#a48a45,color:#3c321d;
+    classDef app fill:#eef4fb,stroke:#6f8eae,color:#1f2f43;
+    classDef cloud fill:#edf6ee,stroke:#709277,color:#203928;
+    classDef simulated fill:#fff0ed,stroke:#b8776c,color:#542a24;
+    class Demo,Staff,Supervisor,Claimant,Admin person;
+    class StaffWeb,ClaimWeb,API,Policy,Analyst,Recovery app;
+    class Vertex,Firestore,Storage,Tasks,Logs,Secrets cloud;
+    class Inventory,Relay simulated;

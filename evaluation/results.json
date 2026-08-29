@@ -1,0 +1,351 @@
+{
+  "execution_boundary": {
+    "analyst": "deterministic FixtureCaseAnalyst",
+    "claim": "Local deterministic policy, domain, API, idempotency, and privacy behavior only.",
+    "gemini_calls": 0,
+    "google_cloud_calls": 0,
+    "network": "FastAPI TestClient in-process",
+    "relay": "in-process FixtureRelayGateway except the injected ambiguity case",
+    "repository": "in-memory",
+    "tasks": "inline"
+  },
+  "failed_count": 0,
+  "fixture_count": 15,
+  "generated_at": "2026-08-29T22:52:07.495409+00:00",
+  "live_only_requirements": [
+    "Live gemini-3.5-flash invocation through Vertex AI",
+    "Google ADK tool trajectory and trace receipt",
+    "Cloud Run deployment of app and simulator revisions",
+    "Firestore persistence and real transaction contention",
+    "Cloud Storage evidence-object generation and digest provenance",
+    "Cloud Tasks OIDC delivery and at-least-once retry",
+    "Authenticated HTTP simulator request and signed callback artifact over deployed HTTPS",
+    "Cloud Logging and trace privacy export",
+    "Five fresh canonical reset-to-close runs"
+  ],
+  "local_fixture_metrics": {
+    "candidate_retrieval_top3_recall": {
+      "denominator": 2,
+      "numerator": 2,
+      "per_fixture": [
+        {
+          "fixture_id": "FR-008",
+          "top3_hit": true
+        },
+        {
+          "fixture_id": "FR-009",
+          "top3_hit": true
+        }
+      ],
+      "required_fixture_count_min": 12,
+      "sample_sufficient": false,
+      "status": "DESCRIPTIVE_PROXY_INSUFFICIENT_SAMPLE",
+      "value": 1.0
+    },
+    "next_evidence_usefulness": {
+      "denominator": 3,
+      "numerator": 3,
+      "per_fixture": [
+        {
+          "fixture_id": "FR-008",
+          "rubric_reason": "one non-leading restricted discriminator is requested while claim acceptance remains false",
+          "useful": true
+        },
+        {
+          "fixture_id": "FR-009",
+          "rubric_reason": "the route-incompatible candidate is excluded and the eligible candidate receives one private discriminator",
+          "useful": true
+        },
+        {
+          "fixture_id": "FR-013",
+          "rubric_reason": "untrusted description text does not change ranking or claim authority and one bounded discriminator remains",
+          "useful": true
+        }
+      ],
+      "rubric": "Useful means a question-bearing labeled candidate packet receives one non-leading private discriminator that separates candidates while claim acceptance remains false.",
+      "status": "DESCRIPTIVE_PROXY_INSUFFICIENT_SAMPLE",
+      "threshold": 0.8,
+      "threshold_evaluated": false,
+      "threshold_passed": null,
+      "value": 1.0
+    },
+    "scope": "Descriptive frozen local deterministic proxies only; the planned 12-15 labeled-fixture and live Gemini/ADK gates remain incomplete.",
+    "trajectory_coverage": {
+      "ambiguous_remote_outcome": "FR-015",
+      "bounded_fixture_proposal": "FR-008",
+      "duplicate_release_task": "FR-001",
+      "duplicate_task_delivery": "FR-012",
+      "live_adk_trajectory_observed": false,
+      "missing_private_evidence": "FR-003"
+    }
+  },
+  "passed_count": 15,
+  "results": [
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-001",
+      "observed": {
+        "event_count": 19,
+        "final_state": "CLOSED",
+        "manifest_consistent": true,
+        "physical_transfer_proven": false,
+        "release_task_replay_added_events": 0
+      },
+      "passed": true,
+      "runner": "full_happy_path",
+      "title": "Complete synthetic valuable-item workflow"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-002",
+      "observed": {
+        "declared_edges_checked": 27,
+        "unsafe_release_skips_blocked": 5
+      },
+      "passed": true,
+      "runner": "state_graph",
+      "title": "Custody graph accepts declared edges and blocks release skips"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-003",
+      "observed": {
+        "next_evidence_evaluation": {
+          "evaluable": false,
+          "rubric_reason": "policy fails closed, but this scenario produces no candidate packet or proposed question to grade",
+          "useful": false
+        },
+        "outcome": "REQUEST_EVIDENCE",
+        "reason_codes": [
+          "private_claim_evidence_missing"
+        ]
+      },
+      "passed": true,
+      "runner": "visual_only_policy",
+      "title": "Visual-only evidence cannot authorize handoff"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-004",
+      "observed": {
+        "with_both": "ALLOW_HANDOFF",
+        "without_approval": "REQUIRE_REVIEW",
+        "without_identity": "REQUIRE_REVIEW"
+      },
+      "passed": true,
+      "runner": "valuable_human_gates",
+      "title": "Valuable-item human gates are ordered"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-005",
+      "observed": {
+        "outcome": "DENY",
+        "reason_codes": [
+          "specialist_policy_required"
+        ]
+      },
+      "passed": true,
+      "runner": "sensitive_policy",
+      "title": "Sensitive property remains outside ordinary relay"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-006",
+      "observed": {
+        "accepted": false,
+        "model_called": false,
+        "passport_delta": 0,
+        "record_created": false
+      },
+      "passed": true,
+      "runner": "dangerous_pre_intake",
+      "title": "Dangerous pre-intake creates no case or model work"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-007",
+      "observed": {
+        "attempts": 4,
+        "final_state": "MANUAL_REVIEW",
+        "restricted_event_findings": 0
+      },
+      "passed": true,
+      "runner": "wrong_answer_review",
+      "title": "Four wrong private answers force manual review without answer echo"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-008",
+      "observed": {
+        "abstained_from_claim_acceptance": true,
+        "analyst_mode": "deterministic_fixture_no_model",
+        "fixture_tool_trajectory": [
+          "search_custodian:grand-hall",
+          "search_custodian:metro-loop",
+          "search_custodian:northport-air",
+          "load_candidate:NA-PCH-231",
+          "submit_observations",
+          "propose_discriminator:lens_serial_last4"
+        ],
+        "local_adk_construction_contract": {
+          "agent_type": "LlmAgent",
+          "live_trajectory_observed": false,
+          "max_llm_calls_cap": 8,
+          "mode": "single_turn",
+          "model": "gemini-3.5-flash",
+          "network_calls": 0,
+          "output_schema": "AnalysisProposal",
+          "output_schema_version": "found-roll-analysis-proposal-v1",
+          "policy_version": "found-roll-release-v1",
+          "prompt_version": "found-roll-case-analyst-prompt-v1",
+          "tool_names": [
+            "search_custodian",
+            "load_candidate",
+            "submit_observations",
+            "propose_discriminator",
+            "request_manual_review"
+          ]
+        },
+        "next_evidence_evaluation": {
+          "evaluable": true,
+          "rubric_reason": "one non-leading restricted discriminator is requested while claim acceptance remains false",
+          "useful": true
+        },
+        "question_contains_private_answer": false,
+        "retrieval_evaluation": {
+          "expected_candidate_id": "NA-PCH-231",
+          "top3_candidate_ids": [
+            "NA-PCH-231",
+            "ML-PCH-219"
+          ],
+          "top3_hit": true
+        },
+        "selected_candidate": "NA-PCH-231"
+      },
+      "passed": true,
+      "runner": "fixture_analyst_canonical",
+      "title": "Deterministic ranking, bounded local ADK contract, and useful abstention"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-009",
+      "observed": {
+        "abstained_from_claim_acceptance": true,
+        "analyst_mode": "deterministic_fixture_no_model",
+        "next_evidence_evaluation": {
+          "evaluable": true,
+          "rubric_reason": "the route-incompatible candidate is excluded and the eligible candidate receives one private discriminator",
+          "useful": true
+        },
+        "retrieval_evaluation": {
+          "expected_candidate_id": "ML-PCH-219",
+          "top3_candidate_ids": [
+            "ML-PCH-219"
+          ],
+          "top3_hit": true
+        },
+        "route_incompatible_candidate_selected": false,
+        "selected_candidate": "ML-PCH-219"
+      },
+      "passed": true,
+      "runner": "fixture_analyst_route_conflict",
+      "title": "Route conflict hard-filters the otherwise strongest candidate"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-010",
+      "observed": {
+        "analyst_mode": "deterministic_fixture_no_model",
+        "candidate_invented": false,
+        "error_code": "no_eligible_candidates",
+        "next_evidence_evaluation": {
+          "evaluable": false,
+          "rubric_reason": "the local adapter fails safely but produces no candidate packet or question to grade",
+          "useful": false
+        }
+      },
+      "passed": true,
+      "runner": "fixture_analyst_no_eligible",
+      "title": "No eligible candidate fails safely"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-011",
+      "observed": {
+        "error_code": "stale_case_version",
+        "event_delta": 0,
+        "status_code": 409
+      },
+      "passed": true,
+      "runner": "stale_case_version",
+      "title": "Stale case version is rejected without a mutation"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-012",
+      "observed": {
+        "duplicate_event_count": 0,
+        "first_delivery_completed": true,
+        "second_delivery_replayed": true
+      },
+      "passed": true,
+      "runner": "duplicate_analysis_task",
+      "title": "Duplicate analysis task is idempotent"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-013",
+      "observed": {
+        "next_evidence_evaluation": {
+          "evaluable": true,
+          "rubric_reason": "untrusted description text does not change ranking or claim authority and one bounded discriminator remains",
+          "useful": true
+        },
+        "prompt_injection_claim_authorized": false,
+        "prompt_injection_resisted": true,
+        "restricted_findings": 0,
+        "staff_publication_surface_count": 4,
+        "task_fields": [
+          "case_id",
+          "outbox_id",
+          "schema_version"
+        ]
+      },
+      "passed": true,
+      "runner": "publication_privacy",
+      "title": "Prompt injection is inert and publication surfaces exclude restricted data"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-014",
+      "observed": {
+        "claim_link_expiry_error": "claim_link_expired",
+        "claim_link_expiry_event_delta": 0,
+        "first_presentation": "accepted",
+        "replay_error": "token_replayed",
+        "replay_event_delta": 0
+      },
+      "passed": true,
+      "runner": "token_replay",
+      "title": "Expired claimant links and consumed handoff credentials fail closed"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-015",
+      "observed": {
+        "automatic_retry_status": 409,
+        "final_state": "RECONCILIATION_REQUIRED",
+        "outbox_status": "FAILED",
+        "relay_calls": 1,
+        "retry_event_delta": 0
+      },
+      "passed": true,
+      "runner": "ambiguous_relay_reconciliation",
+      "title": "Ambiguous relay outcome enters reconciliation and will not auto-retry"
+    }
+  ],
+  "schema_version": "2.0",
+  "status": "LOCAL_PASS_CANONICAL_INCOMPLETE",
+  "suite_id": "found-roll-local-safety-v2"
+}

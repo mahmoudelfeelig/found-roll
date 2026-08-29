@@ -1,0 +1,87 @@
+{
+  "canaries": [
+    {
+      "id": "fixture-private-answer",
+      "length": 4,
+      "normalization": "exact UTF-8 text",
+      "sha256": "0ba896169af5b24dcc877d78f0c3feaf9c9c7f0ca2ef6248f19de437dfc2b003",
+      "source": "synthetic fixture"
+    },
+    {
+      "id": "fr-009-private-answer",
+      "length": 4,
+      "normalization": "exact UTF-8 text",
+      "sha256": "2ac5b691fa275be817b9c8cd1a90d23383ca77c1b20fa4058caf3de6260425d2",
+      "source": "synthetic route-conflict fixture"
+    },
+    {
+      "id": "fr001-claimant-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "dfc632d716e39b2f76caeabf14cec656f345cb2d45c71ae651803b45f44ec675",
+      "source": "fr001"
+    },
+    {
+      "id": "fr001-custodian-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "3ca21dbbc1a71c9ce1a2de5165a8e92adf593e6ce4b8950a8d2452d34de5ad8f",
+      "source": "fr001"
+    },
+    {
+      "id": "fr014-claimant-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "050ac6a48cbf4a389e784229c6a136730d9429c2ba12543bf908abd69a83b397",
+      "source": "fr014"
+    },
+    {
+      "id": "fr014-custodian-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "ff813c9c2caa00e520167ac612fdba761d0bfdd9b340c5f0a241ed55d7d1d604",
+      "source": "fr014"
+    },
+    {
+      "id": "fr014-expired-claim-link",
+      "length": 69,
+      "normalization": "exact UTF-8 text",
+      "sha256": "20c93abaaa51cf1c831e49aac9bdcd71ca1834013e64e524a869100ad56f9194",
+      "source": "fr014"
+    },
+    {
+      "id": "fr015-claimant-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "e534a28c39cfc422f2f33254a918404bfe3954bfe698aacfa3417582823df460",
+      "source": "fr015"
+    },
+    {
+      "id": "fr015-custodian-token",
+      "length": 32,
+      "normalization": "exact UTF-8 text",
+      "sha256": "73b400641182206a69a67b72dda7fde2dd40bb75c8139767a0f243be49f4ef17",
+      "source": "fr015"
+    }
+  ],
+  "disclosure": "Digest-only synthetic canaries. Raw values are never stored or printed by evaluation tooling.",
+  "patterns": [
+    {
+      "id": "embedded-demo-credential-uri",
+      "regex": "found-roll://[^\\\"'\\s]+/(?:claimant|custodian)/[^\\\"'\\s]+"
+    },
+    {
+      "id": "restricted-storage-field",
+      "regex": "(?i)\\\"(?:restricted_value_hash|claimant_token_hash|custodian_token_hash)\\\"\\s*:"
+    },
+    {
+      "id": "raw-authorization-header",
+      "regex": "(?i)authorization\\s*[:=]\\s*(?:bearer\\s+)?[A-Za-z0-9._~+/=-]{12,}"
+    },
+    {
+      "id": "signed-url-secret",
+      "regex": "(?i)(?:[?&](?:token|x-goog-security-token)=|x-goog-(?:signature|credential)=)[^&\\s\\\"']{8,}"
+    }
+  ],
+  "schema_version": "1.0"
+}
