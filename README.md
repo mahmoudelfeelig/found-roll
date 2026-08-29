@@ -4,6 +4,8 @@ Found Roll is a policy-bound recovery workflow for lost property that falls betw
 
 The product is designed like practical early-2010s photo-organizer software rather than a contemporary AI dashboard. The agent is visible through its work and audit trail, not through a chat interface.
 
+Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmoudelfeelig/found-roll). Found Roll's original project code is MIT-licensed; bundled-template and third-party boundaries are recorded in `NOTICE.md` and `THIRD_PARTY_NOTICES.md`.
+
 ## What the demo proves
 
 - One report searches the fictional Grand Hall, Metro Loop, and Northport Air inventories.
@@ -148,6 +150,6 @@ It fails closed unless the release binds the clean tagged Git tree, required fil
 
 ## Submission blockers that cannot be fabricated
 
-The repository deliberately does not invent a hosted Google Cloud URL or revision evidence, live Gemini/Google ADK traces, a submitted commit SHA, a repository URL and release tag with verified judge access, a public video URL and verified duration, or live-model evaluation numbers. The entrant has confirmed entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and the research-informed—not first-person—inspiration mode. A dedicated Google Cloud project on an active no-charge Free Trial, required APIs, IAM authority, and quota still require direct account verification. Every remaining field stays blocked until it is filled from verified accounts and five fresh, frozen canonical Google Cloud runs.
+The repository deliberately does not invent a hosted Google Cloud URL or revision evidence, live Gemini/Google ADK traces, a submitted release commit/tag, a public video URL and verified duration, or live-model evaluation numbers. The entrant has confirmed entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and the research-informed—not first-person—inspiration mode. The public MIT repository is live and anonymously reachable; its final release tag remains intentionally unfrozen until canonical evidence exists. A dedicated Google Cloud project on an active no-charge Free Trial, required APIs, IAM authority, and quota still require direct account verification. Every remaining field stays blocked until it is filled from verified accounts and five fresh, frozen canonical Google Cloud runs.
 
 Found Roll's original project code is released under the [MIT License](LICENSE). Third-party dependencies and the bundled prototype-template boundary retain their upstream terms as recorded in [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md); the MIT grant does not relicense those materials.

@@ -75,7 +75,7 @@ Immediately after recording, save a text receipt alongside the frozen release co
 | Field | Value |
 | --- | --- |
 | Submitted commit/tag | `[fill after freeze]` |
-| Repository/tag and judge access | `[SUBMISSION BLOCKER: fill after publication/access setup and clean-browser verification]` |
+| Repository/tag and judge access | Public MIT repository verified at `https://github.com/mahmoudelfeelig/found-roll`; **[SUBMISSION BLOCKER: fill final release tag after canonical freeze]** |
 | Fixture version | `[fill after reset tooling is frozen]` |
 | App Cloud Run revision | `[fill from recorded run]` |
 | Simulator Cloud Run revision | `[fill from recorded run]` |

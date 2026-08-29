@@ -30,12 +30,12 @@
     "judge_access_verified": false
   },
   "repository": {
-    "url": "https://github.com/replace/found-roll",
+    "url": "https://github.com/mahmoudelfeelig/found-roll",
     "commit_sha": "<exact-head-commit>",
     "tree_sha": "<exact-head-tree>",
     "release_tag": "<release-tag>",
-    "visibility": "unset",
-    "judge_access_verified": false,
+    "visibility": "public",
+    "judge_access_verified": true,
     "testing_devpost_access_confirmed": false,
     "google_hackathons_access_confirmed": false,
     "release_tag_published_confirmed": false

@@ -148,9 +148,9 @@ Fixture hashes recorded during drafting; regenerate and compare them at release 
 | Submission field | Final value |
 | --- | --- |
 | Hosted project | **[SUBMISSION BLOCKER: verified clean-browser URL]** |
-| Repository and judge access | **[SUBMISSION BLOCKER: final repository URL, release tag, and public or private judge-access verification]** |
-| Architecture | `docs/architecture.md` and the rendered `docs/architecture-diagram.png`; replace with the public repository URL after publication |
-| Evaluation report | `docs/evaluation.md` **[must contain actual results]** |
+| Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll), anonymously reachable; **[SUBMISSION BLOCKER: final release tag]** |
+| Architecture | [Architecture and authority boundaries](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture.md) and the [rendered diagram](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture-diagram.png) |
+| Evaluation report | [Local evaluation with explicit canonical limits](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/evaluation.md) |
 | Demo video | **[SUBMISSION BLOCKER: public YouTube/Vimeo URL, verified under four minutes]** |
 | Submitted commit | **[SUBMISSION BLOCKER: full commit SHA]** |
 | Cloud Run revisions | **[SUBMISSION BLOCKER: app and simulator revision names]** |
@@ -160,4 +160,4 @@ Fixture hashes recorded during drafting; regenerate and compare them at release 
 
 ## Pre-submit consistency check
 
-The README, hosted UI, demo narration, architecture diagram, evaluation report, and this Devpost copy must agree on all of the following: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and the exact measured results from the submitted commit. Google Cloud readiness, hosted URL/revisions, repository/tag judge access, public video, commit SHA, and fixture digest remain blockers until their rows above are truthfully filled.
+The README, hosted UI, demo narration, architecture diagram, evaluation report, and this Devpost copy must agree on all of the following: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and the exact measured results from the submitted commit. The public repository and anonymous access are verified. Google Cloud readiness, hosted URL/revisions, final release tag, public video, submitted commit, and fixture digest remain blockers until their rows above are truthfully filled.

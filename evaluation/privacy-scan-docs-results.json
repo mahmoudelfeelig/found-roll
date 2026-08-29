@@ -8,7 +8,7 @@
   "manifest_sha256": "298efc430133999d52ef4f39f05bcd3edee8723e5a5db8fc9995a27999dc5375",
   "pattern_count": 0,
   "recorded_findings": [],
-  "scanned_byte_count": 169156,
+  "scanned_byte_count": 169836,
   "scanned_file_count": 15,
   "schema_version": "1.0",
   "scope": [
