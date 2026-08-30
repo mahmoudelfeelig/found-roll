@@ -2407,6 +2407,55 @@ test("the deployment storage audit uses paginated Storage JSON object modes arou
   );
 });
 
+test("the evidence bucket grants only the app's narrow object and metadata roles", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+  const objectUserCommand = 'gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.objectUser"';
+  const objectUserCheck = "Assert-LastGcloudSuccess -Operation 'evidence-bucket object IAM binding'";
+  const bucketViewerCommand = 'gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.bucketViewer"';
+  const bucketViewerCheck = "Assert-LastGcloudSuccess -Operation 'evidence-bucket metadata IAM binding'";
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  await assertDeploymentRejected(
+    deployment.replace(objectUserCommand, objectUserCommand.replace("roles/storage.objectUser", "roles/storage.objectViewer")),
+    "the evidence bucket must grant roles/storage.objectUser",
+  );
+  await assertDeploymentRejected(
+    deployment.replace(bucketViewerCommand, bucketViewerCommand.replace("roles/storage.bucketViewer", "roles/storage.legacyBucketReader")),
+    "the evidence bucket must grant roles/storage.bucketViewer",
+  );
+  await assertDeploymentRejected(
+    deployment.replace(objectUserCommand, objectUserCommand.replace("$AppServiceAccount", "$SimulatorServiceAccount")),
+    "the object role must bind the exact app service account",
+  );
+  await assertDeploymentRejected(
+    deployment.replace(bucketViewerCommand, bucketViewerCommand.replace("$AppServiceAccount", "$SimulatorServiceAccount")),
+    "the bucket metadata role must bind the exact app service account",
+  );
+  await assertDeploymentRejected(
+    deployment.replace(`${objectUserCommand}\n${objectUserCheck}`, `${objectUserCommand}\n$null = 'unchecked gap'\n${objectUserCheck}`),
+    "the object-role grant must be immediately failure-checked",
+  );
+  await assertDeploymentRejected(
+    deployment.replace(`${bucketViewerCommand}\n${bucketViewerCheck}`, `${bucketViewerCommand}\n$null = 'unchecked gap'\n${bucketViewerCheck}`),
+    "the bucket-viewer grant must be immediately failure-checked",
+  );
+  for (const broadRole of ["roles/storage.admin", "roles/editor"]) {
+    await assertDeploymentRejected(
+      `${deployment}\n\ngcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="${broadRole}"\n`,
+      `${broadRole} must stay banned`,
+    );
+  }
+});
+
 test("the bound deployment runbook must retain the zero-money retry safeguards", async (t) => {
   const fixture = await createFixture(t);
   const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");

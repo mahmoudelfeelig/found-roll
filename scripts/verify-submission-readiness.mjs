@@ -1317,6 +1317,11 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/gcloud\s+artifacts\s+docker\s+images\s+delete/i.test(deployment)
     || !/--soft-delete-duration=0/i.test(deployment)
     || !/--clear-soft-delete/i.test(deployment)
+    || !deployment.includes('gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.objectUser"')
+    || !deployment.includes("Assert-LastGcloudSuccess -Operation 'evidence-bucket object IAM binding'")
+    || !deployment.includes('gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.bucketViewer"')
+    || !deployment.includes("Assert-LastGcloudSuccess -Operation 'evidence-bucket metadata IAM binding'")
+    || /gcloud\s+storage\s+buckets\s+add-iam-policy-binding[^\r\n]*--role="roles\/storage\.(?:admin|editor)"/i.test(deployment)
     || !/softDeletePolicy/i.test(deployment)
     || !/Assert-ProjectStorageBound/i.test(deployment)
     || storageAuditReceiptCallCount !== cloudRunDeployCount

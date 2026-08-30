@@ -642,11 +642,13 @@ $EvidenceBytes
 
 The 5 GiB ceiling is a conservative resource bound, not an assertion that this deployment is Always Free.
 
-Only after the bucket exists, grant the app service account object access on that bucket rather than project-wide storage administration:
+Only after the bucket exists, grant the app service account object access plus the narrow bucket-metadata viewer role on that bucket rather than project-wide storage administration. The application verifies the configured private bucket at startup, which requires `storage.buckets.get`; `roles/storage.bucketViewer` supplies that metadata permission without object access or policy administration:
 
 ```powershell
 gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.objectUser"
-Assert-LastGcloudSuccess -Operation 'evidence-bucket IAM binding'
+Assert-LastGcloudSuccess -Operation 'evidence-bucket object IAM binding'
+gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --project=$ProjectId --member="serviceAccount:$AppServiceAccount" --role="roles/storage.bucketViewer"
+Assert-LastGcloudSuccess -Operation 'evidence-bucket metadata IAM binding'
 ```
 
 Create the queue in the same region as the app with a fully bounded demo retry policy. If it already exists, run the update command instead so an old default—up to 100 attempts—cannot survive:
