@@ -1169,6 +1169,18 @@ function validateDocumentationEvidence(rawByPath, failures) {
   const projectLabelVerificationIndex = deployment.indexOf("$ProjectLabelVerified = $false");
   const deterministicAppUrlDeclaration = '$AppUrl = "https://$($AppService)-$($ProjectNumber).$($Region).run.app"';
   const deterministicSimulatorUrlDeclaration = '$SimulatorUrl = "https://$($SimulatorService)-$($ProjectNumber).$($Region).run.app"';
+  const exactStorageBucketStateCallCount = (
+    deployment.match(/Get-ExactStorageBucketState\s+-BucketName\s+\$(?:Bucket|ProjectBucket)\b/g) || []
+  ).length;
+  const exactStorageBucketHelperStart = deployment.indexOf("function Get-ExactStorageBucketState {");
+  const exactStorageBucketHelperEnd = deployment.indexOf(
+    "function Assert-LastGcloudSuccess {",
+    exactStorageBucketHelperStart,
+  );
+  const exactStorageBucketHelper = exactStorageBucketHelperStart >= 0 && exactStorageBucketHelperEnd > exactStorageBucketHelperStart
+    ? deployment.slice(exactStorageBucketHelperStart, exactStorageBucketHelperEnd)
+    : "";
+  const exactStorageBucketFields = "fields=name%2CprojectNumber%2Clocation%2CiamConfiguration%2CsoftDeletePolicy%2Cversioning%2CretentionPolicy%2Clifecycle%2Cmetageneration";
   const preservingJsonParserCount = (deployment.match(/^function\s+ConvertFrom-JsonPreservingStrings\s*\{/gmi) || []).length;
   const preservingJsonVersionGateCount = (deployment.match(/\$PSVersionTable\.PSVersion\s+-lt\s+\[version\]'7\.5'/g) || []).length;
   const preservingJsonCapabilityCheckCount = (deployment.match(/Parameters\.ContainsKey\('DateKind'\)/g) || []).length;
@@ -1215,6 +1227,20 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || /<exact-existing-(?:app|simulator)-cloud-run-status-url>/i.test(deployment)
     || /two-stage bootstrap/i.test(deployment)
     || !/documented deterministic service URL/i.test(deployment)
+    || !/function\s+Get-ExactStorageBucketState\b/i.test(deployment)
+    || !exactStorageBucketHelper.includes("$AccessTokenLines = @(& gcloud auth print-access-token)")
+    || !exactStorageBucketHelper.includes('Authorization = "Bearer $AccessToken"')
+    || !exactStorageBucketHelper.includes("'x-goog-user-project' = $ProjectId")
+    || !exactStorageBucketHelper.includes(
+      `storage.googleapis.com/storage/v1/b/\${EncodedBucketName}?${exactStorageBucketFields}`,
+    )
+    || !exactStorageBucketHelper.includes("$Headers.Clear()")
+    || !exactStorageBucketHelper.includes("$AccessToken = $null")
+    || !exactStorageBucketHelper.includes("$AccessTokenLines = @()")
+    || !deployment.includes("[string]$BucketState.projectNumber -ne $ExpectedProjectNumber")
+    || exactStorageBucketStateCallCount !== 2
+    || /\$EvidenceBucketJson\s*=\s*gcloud\s+storage\s+buckets\s+describe/i.test(deployment)
+    || /\$BucketState\s*=\s*gcloud\s+storage\s+buckets\s+describe/i.test(deployment)
     || cloudRunDeployCount === 0
     || gatedCloudRunDeployCount !== cloudRunDeployCount
     || projectPinnedCloudRunDeployCount !== cloudRunDeployCount

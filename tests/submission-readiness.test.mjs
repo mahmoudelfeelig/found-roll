@@ -2202,6 +2202,57 @@ test("the deployment runbook derives Cloud Run origins without URL-discovery rev
   ));
 });
 
+test("the deployment storage audit uses project-scoped Storage JSON metadata for exact ownership", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    assert.notEqual(mutatedDeployment, deployment, `missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  await assertDeploymentRejected(deployment.replace(
+    "$BucketState = Get-ExactStorageBucketState -BucketName $ProjectBucket",
+    '$BucketState = gcloud storage buckets describe "gs://$ProjectBucket" --format=json | ConvertFrom-JsonPreservingStrings',
+  ), "storage audit must not trust gcloud bucket describe for projectNumber");
+
+  for (const requiredField of ["projectNumber", "softDeletePolicy", "versioning", "retentionPolicy"]) {
+    await assertDeploymentRejected(
+      deployment.replace(`${requiredField}%2C`, ""),
+      `Storage JSON fields must include ${requiredField}`,
+    );
+  }
+
+  await assertDeploymentRejected(deployment.replace(
+    "$AccessTokenLines = @(& gcloud auth print-access-token)",
+    "$AccessTokenLines = @('literal-token')",
+  ), "Storage JSON read must use an in-memory gcloud access token");
+  await assertDeploymentRejected(deployment.replace(
+    'Authorization = "Bearer $AccessToken"',
+    'Authorization = "Bearer literal-token"',
+  ), "Storage JSON authorization must use the in-memory access token");
+  await assertDeploymentRejected(deployment.replace(
+    "'x-goog-user-project' = $ProjectId",
+    "'x-goog-user-project' = 'foreign-project'",
+  ), "Storage JSON read must quota-scope the dedicated project");
+  await assertDeploymentRejected(deployment.replace(
+    "        $Headers.Clear()",
+    "        # Storage API headers were not cleared",
+  ), "Storage JSON headers must be cleared after the request");
+  await assertDeploymentRejected(deployment.replace(
+    "        $AccessToken = $null\n        $AccessTokenLines = @()",
+    "        # Storage API token was not cleared",
+  ), "Storage JSON token must be cleared after the request");
+  await assertDeploymentRejected(deployment.replace(
+    "[string]$BucketState.projectNumber -ne $ExpectedProjectNumber",
+    "$false",
+  ), "storage audit must compare exact project ownership");
+});
+
 test("the bound deployment runbook must retain the zero-money retry safeguards", async (t) => {
   const fixture = await createFixture(t);
   const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");

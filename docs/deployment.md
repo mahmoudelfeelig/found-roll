@@ -137,6 +137,30 @@ function Get-Sha256Hex {
     }
 }
 
+function Get-ExactStorageBucketState {
+    param([Parameter(Mandatory = $true)][string]$BucketName)
+    if ($BucketName -notmatch '^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$') { throw 'Refusing an invalid Cloud Storage bucket name.' }
+    $AccessTokenLines = @(& gcloud auth print-access-token)
+    if ($LASTEXITCODE -ne 0) { throw "Could not obtain an in-memory token for gs://$BucketName." }
+    $AccessToken = ($AccessTokenLines -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($AccessToken)) { throw "Cloud Storage ownership verification received an empty access token for gs://$BucketName." }
+    $Headers = @{ Authorization = "Bearer $AccessToken"; 'x-goog-user-project' = $ProjectId }
+    $EncodedBucketName = [uri]::EscapeDataString($BucketName)
+    try {
+        $BucketState = Invoke-RestMethod `
+            -Method Get `
+            -Uri "https://storage.googleapis.com/storage/v1/b/${EncodedBucketName}?fields=name%2CprojectNumber%2Clocation%2CiamConfiguration%2CsoftDeletePolicy%2Cversioning%2CretentionPolicy%2Clifecycle%2Cmetageneration" `
+            -Headers $Headers `
+            -ErrorAction Stop
+    } finally {
+        $Headers.Clear()
+        $AccessToken = $null
+        $AccessTokenLines = @()
+    }
+    if ([string]$BucketState.name -ne $BucketName) { throw "Cloud Storage returned the wrong bucket identity for gs://$BucketName." }
+    return $BucketState
+}
+
 function Assert-LastGcloudSuccess {
     param([Parameter(Mandatory = $true)][string]$Operation)
     if ($LASTEXITCODE -ne 0) { throw "gcloud failed during $Operation." }
@@ -493,9 +517,7 @@ if ($ExistingBucketExitCode -ne 0) {
     gcloud storage buckets create "gs://$Bucket" --project=$ProjectId --location=$Region --uniform-bucket-level-access --public-access-prevention --soft-delete-duration=0
     Assert-LastGcloudSuccess -Operation 'evidence-bucket creation'
 }
-$EvidenceBucketJson = gcloud storage buckets describe "gs://$Bucket" --format=json
-if ($LASTEXITCODE -ne 0) { throw "Could not resolve the evidence bucket gs://$Bucket after creation." }
-$EvidenceBucketState = $EvidenceBucketJson | ConvertFrom-JsonPreservingStrings
+$EvidenceBucketState = Get-ExactStorageBucketState -BucketName $Bucket
 if (
     [string]$EvidenceBucketState.name -ne $Bucket -or
     [string]$EvidenceBucketState.projectNumber -ne $ProjectNumber
@@ -987,8 +1009,7 @@ function Assert-ProjectStorageBound {
     foreach ($ProjectBucket in $ProjectBuckets) {
         gcloud storage buckets update "gs://$ProjectBucket" --project=$ExpectedProjectId --clear-soft-delete
         Assert-LastGcloudSuccess -Operation "soft-delete disablement for gs://$ProjectBucket"
-        $BucketState = gcloud storage buckets describe "gs://$ProjectBucket" --format=json | ConvertFrom-JsonPreservingStrings
-        if ($LASTEXITCODE -ne 0) { throw "Could not describe gs://$ProjectBucket." }
+        $BucketState = Get-ExactStorageBucketState -BucketName $ProjectBucket
         if ([string]$BucketState.projectNumber -ne $ExpectedProjectNumber) {
             throw "Bucket gs://$ProjectBucket is not owned by expected project number $ExpectedProjectNumber."
         }
