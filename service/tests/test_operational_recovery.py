@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from types import SimpleNamespace
@@ -12,16 +12,23 @@ from fastapi.testclient import TestClient
 
 from app.agent import FixtureCaseAnalyst
 from app.config import Settings
-from app.domain import CaseRecord, CustodyState, RiskTier
-from app.errors import Unavailable
+from app.domain import (
+    CaseRecord,
+    CustodyState,
+    ExecutionClaimDisposition,
+    OutboxFailureStage,
+    OutboxKind,
+    OutboxStatus,
+    RiskTier,
+)
+from app.errors import Conflict, Unavailable
 from app.evidence import InMemoryEvidenceStore
 from app.fixtures import DEMO_CASE_ID, reset_demo_repository
 from app.main import create_app
 from app.outbox import CloudTasksPublisher, InlineTaskPublisher, make_outbox
 from app.fixtures import fixture_case
-from app.domain import OutboxKind, OutboxStatus
 from app.relay import FixtureRelayGateway
-from app.repository import FirestoreRepository, InMemoryRepository
+from app.repository import FirestoreRepository, InMemoryRepository, MutationSpec
 
 
 DEMO_TOKEN = "production-demo-mutation-token-0001"
@@ -652,6 +659,7 @@ def test_firestore_fixture_reset_deletes_only_exact_synthetic_scope():
         f"{prefix}_passports/{DEMO_CASE_ID}": {"id": DEMO_CASE_ID},
         f"{prefix}_passports/{DEMO_CASE_ID}/events/evt-old": {"case_id": DEMO_CASE_ID},
         f"{prefix}_outbox/out-old": {"case_id": DEMO_CASE_ID},
+        f"{prefix}_analysisExecutionClaims/out-old": {"case_id": DEMO_CASE_ID},
         f"{prefix}_handoffs/handoff-old": {"case_id": DEMO_CASE_ID},
         f"{prefix}_tokens/token-old": {"case_id": DEMO_CASE_ID},
         f"{prefix}_idempotency/idem-old": {"response": {"case_id": DEMO_CASE_ID}},
@@ -674,12 +682,101 @@ def test_firestore_fixture_reset_deletes_only_exact_synthetic_scope():
     ]
     assert len(demo_events) == 1
     assert f"{prefix}_outbox/out-old" not in rows
+    assert f"{prefix}_analysisExecutionClaims/out-old" not in rows
     assert f"{prefix}_handoffs/handoff-old" not in rows
     assert f"{prefix}_tokens/token-old" not in rows
     assert f"{prefix}_idempotency/idem-old" not in rows
     assert f"{prefix}_passports/FR-UNRELATED-0001" in rows
     assert f"{prefix}_outbox/out-unrelated" in rows
     assert f"{prefix}_inventoryItems/UNRELATED-ITEM" in rows
+
+
+def test_firestore_execution_claim_matches_memory_single_flight_and_token_guards():
+    prefix = "foundRoll"
+    claimed_at = datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc)
+    case = fixture_case().model_copy(
+        update={"state": CustodyState.ANALYZING, "version": 2}
+    )
+    outbox = make_outbox(
+        OutboxKind.ANALYZE_CASE,
+        fixture_case(),
+        created_at=claimed_at,
+    ).model_copy(update={"status": OutboxStatus.DISPATCHED})
+    rows = {
+        f"{prefix}_passports/{case.id}": case.model_dump(mode="python"),
+        f"{prefix}_outbox/{outbox.id}": outbox.model_dump(mode="python"),
+    }
+    repository = FirestoreRepository.__new__(FirestoreRepository)
+    repository._prefix = prefix
+    repository._client = _FakeFirestoreClient(rows)
+    repository._firestore = _FakeFirestoreModule()
+
+    winner = repository.claim_outbox_execution(
+        outbox.id,
+        claim_token="firestore-winner-token",
+        claimed_at=claimed_at,
+        lease_expires_at=claimed_at + timedelta(seconds=5),
+    )
+    duplicate = repository.claim_outbox_execution(
+        outbox.id,
+        claim_token="firestore-duplicate-token",
+        claimed_at=claimed_at + timedelta(seconds=1),
+        lease_expires_at=claimed_at + timedelta(seconds=6),
+    )
+    replacement = repository.claim_outbox_execution(
+        outbox.id,
+        claim_token="firestore-recovery-token",
+        claimed_at=claimed_at + timedelta(seconds=6),
+        lease_expires_at=claimed_at + timedelta(seconds=11),
+    )
+
+    assert winner.disposition == ExecutionClaimDisposition.ACQUIRED
+    assert duplicate.disposition == ExecutionClaimDisposition.IN_PROGRESS
+    assert duplicate.claim.token_hash == winner.claim.token_hash
+    assert replacement.disposition == ExecutionClaimDisposition.STALE_RECOVERY
+    assert replacement.claim.recovery_required is True
+    assert replacement.claim.token_hash != winner.claim.token_hash
+
+    stale_result = MutationSpec(
+        case_id=case.id,
+        expected_version=case.version,
+        target_state=CustodyState.CANDIDATES_READY,
+        event_type="CANDIDATE_PACKET_PROPOSED",
+        actor="agent:case-analyst",
+        reason="Synthetic stale-winner result.",
+        idempotency_key=f"outbox:{outbox.id}:candidates-ready",
+        fingerprint="stale-winner-fingerprint",
+        occurred_at=claimed_at + timedelta(seconds=7),
+    )
+    with pytest.raises(Conflict) as stale_write:
+        repository.apply_mutation(
+            stale_result,
+            execution_claim_outbox_id=outbox.id,
+            execution_claim_token="firestore-winner-token",
+        )
+    assert stale_write.value.code == "outbox_execution_claim_lost"
+
+    with pytest.raises(Conflict) as losing_terminal:
+        repository.mark_outbox_execution(
+            outbox.id,
+            OutboxStatus.FAILED,
+            claim_token="firestore-duplicate-token",
+            completed_at=claimed_at + timedelta(seconds=8),
+            failure_stage=OutboxFailureStage.EXECUTE,
+            failure_code="analyst_unavailable",
+        )
+    assert losing_terminal.value.code == "outbox_execution_claim_lost"
+    terminal = repository.mark_outbox_execution(
+        outbox.id,
+        OutboxStatus.FAILED,
+        claim_token="firestore-recovery-token",
+        completed_at=claimed_at + timedelta(seconds=9),
+        failure_stage=OutboxFailureStage.EXECUTE,
+        failure_code="analyst_unavailable",
+    )
+    assert terminal.status == OutboxStatus.FAILED
+    stored_claim = rows[f"{prefix}_analysisExecutionClaims/{outbox.id}"]
+    assert stored_claim["terminal_status"] == OutboxStatus.FAILED
 
 
 class _FailOncePublisher:

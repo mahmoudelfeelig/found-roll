@@ -119,14 +119,14 @@ Evidence upload is retry-safe within one workflow epoch. The case, epoch, idempo
 
 ## Real and simulated boundary
 
-| Element | Canonical demo status | What it proves | What it does not prove |
+| Element | Required canonical-demo state | What it proves | What it does not prove |
 | --- | --- | --- | --- |
-| Gemini evidence analysis | Real live Vertex AI call using the pinned configured model | A model inspected the authorized synthetic evidence and returned a typed proposal | Match accuracy outside the published fixture set; release authority |
-| Google ADK | Real live bounded agent/tool trajectory | The model used the permitted evidence-planning workflow | Independent agent governance or a multi-agent system |
-| Cloud Run, Firestore, Cloud Storage, Cloud Tasks, Cloud Logging | Real deployed Google Cloud resources | Network execution, durable state, retried work, and trace correlation for the shown case | Production scale, regulatory compliance, or zero-operator operation |
-| Policy, state versioning, idempotency, token consumption, manifest | Real application code | The shown transition sequence follows the frozen rules and replays do not duplicate effects | Correctness beyond the tested contracts or immunity from a project administrator |
+| Gemini evidence analysis | Must be a live Vertex AI call using the pinned configured model; canonical receipt pending | A model inspected the authorized synthetic evidence and returned a typed proposal | Match accuracy outside the published fixture set; release authority |
+| Google ADK | Must be a live bounded agent/tool trajectory; canonical receipt pending | The model used the permitted evidence-planning workflow | Independent agent governance or a multi-agent system |
+| Cloud Run, Firestore, Cloud Storage, Cloud Tasks, Cloud Logging | Must be deployed in the dedicated Google Cloud project; canonical receipts pending | Network execution, durable state, retried work, and trace correlation for the shown case | Production scale, regulatory compliance, or zero-operator operation |
+| Policy, state versioning, idempotency, token consumption, manifest | Real application code; canonical deployment evidence pending | The shown transition sequence follows the frozen rules and replays do not duplicate effects | Correctness beyond the tested contracts or immunity from a project administrator |
 | Grand Hall, Metro Loop, Northport Air | Fictional simulators with synthetic inventory | One adapter can query isolated namespaces through real HTTPS | A live venue, transit, or airport integration |
-| Relay Post | Separately deployed, permanently labeled `SIMULATED` | Reservation, expiry, credential presentation, signed callback, and replay handling over a real API boundary | A real courier, locker, handoff, ownership check, or physical possession |
+| Relay Post | Must be separately deployed and permanently labeled `SIMULATED`; canonical receipt pending | Reservation, expiry, credential presentation, signed callback, and replay handling over a real API boundary | A real courier, locker, handoff, ownership check, or physical possession |
 | Fixture photographs and route history | Synthetic | A reproducible privacy-safe scenario | Real claimant data or real-world prevalence |
 
 Do not record the canonical demo in local fixture mode. The recording must show the model run ID and configured model, both Cloud Run revisions, the Firestore passport mutation, the Cloud Task, and a trace/correlation ID from the same reset run.

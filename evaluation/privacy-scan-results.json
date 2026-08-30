@@ -1,14 +1,14 @@
 {
   "canary_count": 9,
   "decode_replacement_count": 0,
-  "disclosure": "This is a UTF-8 text scan. Unsupported binary files are counted but not content-scanned. Findings contain rule IDs and locations only; canary and matched values are never written or printed.",
+  "disclosure": "This is a UTF-8 text scan. Unsupported binary files are counted but not content-scanned. Findings contain rule IDs and locations only; canary and matched values are never written or printed. Validated per-canary matching modes compare entropy-bearing JSON metadata and numeric scalars exactly, match reference fields only at token boundaries, and scan semantic JSON strings plus unstructured text for every matching substring.",
   "finding_count": 0,
   "finding_values_included": false,
   "findings_by_rule": {},
-  "manifest_sha256": "772683f9fe3c6f6bc9305659939e264764f9b96a9c9e832ccf7bc0215b779c9b",
+  "manifest_sha256": "d89474ff060a97ee5358753d834389315d9ab2abbe567fcf8be3df6328f002f9",
   "pattern_count": 4,
   "recorded_findings": [],
-  "scanned_byte_count": 647243,
+  "scanned_byte_count": 647236,
   "scanned_file_count": 31,
   "schema_version": "1.0",
   "scope": [

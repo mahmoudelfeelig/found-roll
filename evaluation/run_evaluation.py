@@ -71,6 +71,131 @@ def json_text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
+OPAQUE_PRIVACY_FIELD_SUFFIXES = (
+    "_at",
+    "_at_utc",
+    "_digest",
+    "_digests",
+    "_etag",
+    "_generation",
+    "_generations",
+    "_hash",
+    "_hashes",
+    "_id",
+    "_ids",
+    "_sha",
+    "_sha256",
+    "_utc",
+)
+OPAQUE_PRIVACY_FIELD_NAMES = {
+    "checksum",
+    "digest",
+    "etag",
+    "generation",
+    "hash",
+    "id",
+    "sha256",
+    "evidence_digests",
+    "idempotency_key",
+    "last_replay_task_name",
+    "project_number",
+    "release_task_name",
+    "submitted_commit",
+    "task_name",
+    "workflow_epoch",
+}
+REFERENCE_PRIVACY_FIELD_SUFFIXES = (
+    "_bucket",
+    "_file",
+    "_namespace",
+    "_origin",
+    "_package",
+    "_path",
+    "_ref",
+    "_refs",
+    "_resource",
+    "_resources",
+    "_revision",
+    "_uri",
+    "_url",
+)
+REFERENCE_PRIVACY_FIELD_NAMES = {
+    "bucket",
+    "entrypoint",
+    "evidence_refs",
+    "firestore_namespace",
+    "origin",
+    "package",
+    "path",
+    "render",
+    "renderer",
+    "repository",
+    "resource",
+    "revision",
+    "source",
+    "source_file",
+    "uri",
+    "url",
+}
+
+
+def privacy_field_mode(field_name: str) -> str:
+    if field_name in REFERENCE_PRIVACY_FIELD_NAMES or field_name.endswith(REFERENCE_PRIVACY_FIELD_SUFFIXES):
+        return "reference"
+    if field_name in OPAQUE_PRIVACY_FIELD_NAMES or field_name.endswith(OPAQUE_PRIVACY_FIELD_SUFFIXES):
+        return "opaque"
+    return "semantic"
+
+
+def scalar_contains_private_token(value: str, token: str, mode: str) -> bool:
+    if mode == "opaque":
+        return value == token
+    if mode == "semantic":
+        return token in value
+
+    start = 0
+    while True:
+        index = value.find(token, start)
+        if index < 0:
+            return False
+        end = index + len(token)
+        left_boundary = index == 0 or not value[index - 1].isalnum()
+        right_boundary = end == len(value) or not value[end].isalnum()
+        if left_boundary and right_boundary:
+            return True
+        start = index + 1
+
+
+def structured_value_contains_private_token(
+    value: Any,
+    token: str,
+    *,
+    mode: str = "semantic",
+) -> bool:
+    """Search semantic text, references, and opaque metadata with field-aware rules."""
+
+    if isinstance(value, dict):
+        return any(
+            scalar_contains_private_token(str(key), token, "semantic")
+            or structured_value_contains_private_token(
+                child, token, mode=privacy_field_mode(str(key))
+            )
+            for key, child in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(
+            structured_value_contains_private_token(child, token, mode=mode)
+            for child in value
+        )
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return str(value) == token
+    if not isinstance(value, str):
+        return False
+    return scalar_contains_private_token(value, token, mode)
+
+
 def next_evidence_is_useful(proposal: AnalysisProposal) -> bool:
     """Apply the frozen local rubric; this is not a model-grade or release decision."""
 
@@ -87,14 +212,27 @@ class RunContext:
     def __init__(self) -> None:
         self.canaries: dict[str, dict[str, Any]] = {}
         self.publication_artifacts: dict[str, Any] = {}
-        self.add_canary("fixture-private-answer", DEMO_PRIVATE_ANSWER, "synthetic fixture")
+        self.add_canary(
+            "fixture-private-answer",
+            DEMO_PRIVATE_ANSWER,
+            "synthetic fixture",
+            matching="structured_values",
+        )
 
-    def add_canary(self, canary_id: str, value: str, source: str) -> None:
+    def add_canary(
+        self,
+        canary_id: str,
+        value: str,
+        source: str,
+        *,
+        matching: str = "exact_window",
+    ) -> None:
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         self.canaries[canary_id] = {
             "id": canary_id,
             "sha256": digest,
             "length": len(value),
+            "matching": matching,
             "normalization": "exact UTF-8 text",
             "source": source,
         }
@@ -427,14 +565,15 @@ def scenario_wrong_answer_review(_context: RunContext) -> dict[str, Any]:
         begin_and_process_analysis(client, key_prefix="fr007")
         final = None
         claim_link = issue_claim_link(client, key_prefix="fr007")
-        for attempt in range(1, 5):
+        wrong_answers = [f"incorrect-{attempt}" for attempt in range(1, 5)]
+        for attempt, wrong_answer in enumerate(wrong_answers, start=1):
             case = current_case(client)
             response = client.post(
                 f"/api/v1/passports/{DEMO_CASE_ID}/claim-evidence",
                 json={
                     "expected_version": case["version"],
                     "idempotency_key": f"fr007-wrong-{attempt:03d}",
-                    "answer": f"incorrect-{attempt}",
+                    "answer": wrong_answer,
                 },
                 headers={"X-Found-Roll-Claim-Link": claim_link["token"]},
             )
@@ -444,8 +583,13 @@ def scenario_wrong_answer_review(_context: RunContext) -> dict[str, Any]:
             if final["state"] == "CLARIFICATION_REQUIRED":
                 claim_link = response_body["replacement_claim_link"]
         require(final is not None and final["state"] == "MANUAL_REVIEW", "wrong_answer_review_not_reached")
-        events = json_text(event_items(client))
-        require(DEMO_PRIVATE_ANSWER not in events, "private_answer_leaked_to_events")
+        event_records = event_items(client)
+        events = json_text(event_records)
+        for private_value in (DEMO_PRIVATE_ANSWER, *wrong_answers):
+            require(
+                not structured_value_contains_private_token(event_records, private_value),
+                "private_answer_leaked_to_events",
+            )
         for field in ("restricted_value_hash", "claimant_token_hash", "custodian_token_hash"):
             require(field not in events, "restricted_field_leaked_to_events")
         return {"attempts": 4, "final_state": "MANUAL_REVIEW", "restricted_event_findings": 0}
@@ -485,7 +629,7 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
     require(not leak, "claimant_safe_candidate_restricted_field_leak")
     require(tool_names == allowed_tools, "local_adk_tool_contract_changed")
     require(adk_agent.output_schema is AnalysisProposal, "local_adk_output_schema_changed")
-    require(adk_agent.mode == "single_turn", "local_adk_mode_not_bounded")
+    require(adk_agent.mode == "chat", "local_adk_root_mode_invalid")
     require(adk_analyst.max_llm_calls == 8, "local_adk_call_cap_changed")
     require(
         adk_agent.generate_content_config is not None
@@ -530,7 +674,12 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
 
 def scenario_fixture_analyst_route_conflict(context: RunContext) -> dict[str, Any]:
     private_answer = "7831"
-    context.add_canary("fr-009-private-answer", private_answer, "synthetic route-conflict fixture")
+    context.add_canary(
+        "fr-009-private-answer",
+        private_answer,
+        "synthetic route-conflict fixture",
+        matching="structured_values",
+    )
     candidates = []
     for candidate in fixture_candidates("evaluation-only-pepper"):
         if candidate.id == "NA-PCH-231":
@@ -668,7 +817,10 @@ def scenario_publication_privacy(context: RunContext) -> dict[str, Any]:
             "opaque_task": task,
         }
         serialized = json_text(surfaces)
-        require(DEMO_PRIVATE_ANSWER not in serialized, "private_answer_leaked_to_staff_publication_surface")
+        require(
+            not structured_value_contains_private_token(surfaces, DEMO_PRIVATE_ANSWER),
+            "private_answer_leaked_to_staff_publication_surface",
+        )
         for field in ("restricted_value_hash", "claimant_token_hash", "custodian_token_hash"):
             require(field not in serialized, "restricted_field_leaked_to_staff_publication_surface")
         context.add_publication_artifact("fr-013-staff-publication-surfaces.json", surfaces)
@@ -911,7 +1063,11 @@ def write_artifacts(context: RunContext, report: dict[str, Any]) -> None:
         json.dumps(
             {
                 "schema_version": "1.0",
-                "disclosure": "Digest-only synthetic canaries. Raw values are never stored or printed by evaluation tooling.",
+                "disclosure": (
+                    "Digest-only synthetic canaries. Raw values are never stored or printed by evaluation tooling. "
+                    "Short numeric answers use field-aware structured-value matching for semantic text, "
+                    "opaque metadata, numeric scalars, and URI/reference fields."
+                ),
                 "canaries": sorted(context.canaries.values(), key=lambda item: item["id"]),
                 "patterns": [
                     {

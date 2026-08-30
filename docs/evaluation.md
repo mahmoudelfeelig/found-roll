@@ -49,7 +49,7 @@ The usefulness rubric applies only to an actual question-bearing candidate packe
 
 ## Publication privacy evidence
 
-The digest-only scanner received SHA-256 digests and exact character lengths, never raw canary values. Findings contain rule IDs and locations only. Its deliberate clean/leaky self-test suite passed, including the negative assertion that neither console output nor JSON reports repeat the raw test canary.
+The digest-only scanner received SHA-256 digests, exact character lengths, and validated matching modes, never raw canary values. For valid JSON, short numeric answer canaries compare entropy-bearing metadata and numeric scalars exactly, match URI/reference fields only at non-alphanumeric token boundaries, and scan every substring of semantic fields; unstructured text remains an exact-window scan. Findings contain rule IDs and locations only. Its deliberate clean/leaky self-test suite passed, including the negative assertion that neither console output nor JSON reports repeat the raw test canary.
 
 The strict text scan covers `src/`, built-client text files, generated staff/publication artifacts including `fr-013-staff-publication-surfaces.json`, `evaluation/results.json`, and JSON receipts under `artifacts/verification/`. It checks the synthetic private-answer digest, issued credential digests, credential-URI shapes, restricted persistence-field shapes, raw authorization-header shapes, and signed-URL secret shapes. Exact file and unsupported-binary counts belong to the generated scan receipt because they change with the frozen tree.
 

@@ -134,7 +134,7 @@ The final offline freeze gate is [`scripts/verify-submission-readiness.mjs`](scr
 node scripts/verify-submission-readiness.mjs --record artifacts/private/submission-release.json
 ```
 
-It fails closed unless the release binds the clean tagged Git tree, required file and source hashes, the deterministic `dist/client` build manifest, five unique preparation/run/chain-audit triples, canonical privacy coverage, filmed run, clean-browser receipt, repository access, video limits, and explicit human attestations. It recomputes each 19-event chain and closure manifest, performs no network calls, and never upgrades local fixture evidence into a canonical result.
+It fails closed unless the release binds the clean tagged Git tree, required file and source hashes, the deterministic `dist/client` build manifest, fresh redacted Free Trial and service-cap evidence, five unique preparation/run/chain-audit triples, canonical privacy coverage, filmed run, clean-browser receipt, repository access, video limits, and explicit human attestations. It recomputes each 19-event chain and closure manifest, performs no network calls, and never upgrades local fixture evidence into a canonical result. Before deployment APIs are enabled, the same verifier can run the narrower `--preflight-only` gate.
 
 ## Architecture and submission material
 
@@ -146,6 +146,7 @@ It fails closed unless the release binds the clean tagged Git tree, required fil
 - [`docs/evaluation.md`](docs/evaluation.md) — verified local results with explicit limits and canonical cloud evidence still required.
 - [`docs/demo-script.md`](docs/demo-script.md) — a 3:35 recording plan with visible Google Cloud proof.
 - [`docs/devpost-submission.md`](docs/devpost-submission.md) — submission copy with unverified fields explicitly blocked.
+- [`docs/google-cloud-billing-preflight.template.json`](docs/google-cloud-billing-preflight.template.json) and [`docs/google-cloud-spend-cap.template.json`](docs/google-cloud-spend-cap.template.json) — fail-closed private receipt shapes for the redacted Free Trial and project/service cap captures.
 - [`docs/canonical-run.template.json`](docs/canonical-run.template.json), [`docs/chain-audit.template.json`](docs/chain-audit.template.json), [`docs/canonical-privacy.template.json`](docs/canonical-privacy.template.json), and [`docs/clean-browser.template.json`](docs/clean-browser.template.json) — fail-closed private receipt shapes for the five live executions, recomputable event chains, and final publication review.
 
 ## Submission blockers that cannot be fabricated

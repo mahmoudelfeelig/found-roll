@@ -1,5 +1,7 @@
 from importlib.metadata import version
 
+import pytest
+from google.adk.agents.invocation_context import InvocationContext, LlmCallsLimitExceededError
 from google.genai.types import Part
 
 from app.agent import VertexAdkCaseAnalyst, deterministic_candidate_packet
@@ -13,7 +15,7 @@ from app.domain import (
     EvidenceVisibility,
 )
 from app.fixtures import fixture_candidates, fixture_case
-from app.errors import Conflict
+from app.errors import Conflict, Unavailable
 
 
 def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatch):
@@ -32,6 +34,7 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     assert agent.model.model == "gemini-3.5-flash"
     assert agent.generate_content_config is not None
     assert agent.generate_content_config.max_output_tokens == 2048
+    assert agent.mode == "chat"
     assert agent.output_schema is AnalysisProposal
     assert agent.instruction == CASE_ANALYST_INSTRUCTION
     assert len(agent.tools) == 5
@@ -60,6 +63,25 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     analyst._configure_vertex_environment()
     assert __import__("os").environ["GOOGLE_GENAI_USE_ENTERPRISE"] == "TRUE"
     assert __import__("os").environ["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+
+
+def test_adk_llm_call_ceiling_is_translated_to_terminal_unavailability(monkeypatch):
+    def exhaust_call_budget(_context):
+        raise LlmCallsLimitExceededError("Max number of llm calls limit of `8` exceeded")
+
+    # Keep the real Runner path so root-agent mode validation executes. The
+    # patched call counter stops immediately before any model request.
+    monkeypatch.setattr(InvocationContext, "increment_llm_call_count", exhaust_call_budget)
+    analyst = VertexAdkCaseAnalyst(
+        project="fixture-project",
+        location="us-central1",
+        model_name="gemini-3.5-flash",
+    )
+
+    with pytest.raises(Unavailable) as raised:
+        analyst.analyze(fixture_case(), fixture_candidates("test-pepper"))
+
+    assert raised.value.code == "adk_llm_call_limit_exceeded"
 
 
 def test_vertex_request_attaches_only_explicitly_authorized_gcs_images():

@@ -75,7 +75,7 @@ For the descriptive usefulness proxy, useful means an actual candidate packet fa
 
 ## Privacy scanner scope
 
-`scripts/privacy-scan.py` accepts digest-only canaries: SHA-256, exact character length, and a non-secret label. It hashes same-length windows in artifacts and records rule ID, file, line, and column only. Reports never contain the canary or matched value.
+`scripts/privacy-scan.py` accepts digest-only canaries: SHA-256, exact character length, a non-secret label, and a validated matching mode. It hashes same-length windows in artifacts and records rule ID, file, line, and column only. For valid JSON, the short numeric answer canaries compare entropy-bearing metadata and numeric scalars exactly, match URI/reference fields only at non-alphanumeric token boundaries, and scan every substring of semantic fields; unstructured text remains an exact-window scan. Reports never contain the canary or matched value.
 
 The strict text publication scan covers:
 

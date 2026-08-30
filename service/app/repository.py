@@ -14,12 +14,15 @@ from .domain import (
     CaseRecord,
     ClaimLinkRecord,
     CustodyState,
+    ExecutionClaimDisposition,
     EventRecord,
     HandoffRecord,
     IdempotencyRecord,
     MutationReceipt,
+    OutboxKind,
     OutboxRecord,
     OutboxFailureStage,
+    OutboxExecutionClaim,
     OutboxStatus,
     TokenPurpose,
     TokenRecord,
@@ -68,6 +71,12 @@ class ClaimEvidenceCommit:
     duplicate: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionClaimResult:
+    disposition: ExecutionClaimDisposition
+    claim: OutboxExecutionClaim
+
+
 class Repository(Protocol):
     def reset(self) -> None: ...
 
@@ -106,7 +115,13 @@ class Repository(Protocol):
 
     def get_event(self, case_id: str, event_id: str) -> EventRecord: ...
 
-    def apply_mutation(self, spec: MutationSpec) -> AppliedMutation: ...
+    def apply_mutation(
+        self,
+        spec: MutationSpec,
+        *,
+        execution_claim_outbox_id: str | None = None,
+        execution_claim_token: str | None = None,
+    ) -> AppliedMutation: ...
 
     def get_outbox(self, outbox_id: str) -> OutboxRecord: ...
 
@@ -119,6 +134,26 @@ class Repository(Protocol):
         *,
         result_attestation_id: str | None = None,
         completed_at: datetime | None = None,
+        failure_stage: OutboxFailureStage | None = None,
+        failure_code: str | None = None,
+    ) -> OutboxRecord: ...
+
+    def claim_outbox_execution(
+        self,
+        outbox_id: str,
+        *,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> ExecutionClaimResult: ...
+
+    def mark_outbox_execution(
+        self,
+        outbox_id: str,
+        status: OutboxStatus,
+        *,
+        claim_token: str,
+        completed_at: datetime,
         failure_stage: OutboxFailureStage | None = None,
         failure_code: str | None = None,
     ) -> OutboxRecord: ...
@@ -265,6 +300,7 @@ class InMemoryRepository:
         self._events: dict[str, list[EventRecord]] = {}
         self._idempotency: dict[str, IdempotencyRecord] = {}
         self._outboxes: dict[str, OutboxRecord] = {}
+        self._execution_claims: dict[str, OutboxExecutionClaim] = {}
         self._handoffs: dict[str, HandoffRecord] = {}
         self._tokens: dict[str, TokenRecord] = {}
         self._claim_links: dict[str, ClaimLinkRecord] = {}
@@ -277,6 +313,7 @@ class InMemoryRepository:
             self._events.clear()
             self._idempotency.clear()
             self._outboxes.clear()
+            self._execution_claims.clear()
             self._handoffs.clear()
             self._tokens.clear()
             self._claim_links.clear()
@@ -302,6 +339,11 @@ class InMemoryRepository:
                 self._candidates.pop(candidate_id, None)
             self._outboxes = {
                 key: row for key, row in self._outboxes.items() if row.case_id != case.id
+            }
+            self._execution_claims = {
+                key: row
+                for key, row in self._execution_claims.items()
+                if row.case_id != case.id
             }
             self._handoffs = {
                 key: row for key, row in self._handoffs.items() if row.case_id != case.id
@@ -450,8 +492,29 @@ class InMemoryRepository:
                 return event
         raise NotFound("Custody event")
 
-    def apply_mutation(self, spec: MutationSpec) -> AppliedMutation:
+    def apply_mutation(
+        self,
+        spec: MutationSpec,
+        *,
+        execution_claim_outbox_id: str | None = None,
+        execution_claim_token: str | None = None,
+    ) -> AppliedMutation:
+        if (execution_claim_outbox_id is None) != (execution_claim_token is None):
+            raise ValueError("execution claim outbox ID and token must be supplied together")
         with self._lock:
+            if execution_claim_outbox_id is not None and execution_claim_token is not None:
+                claim = self._execution_claims.get(execution_claim_outbox_id)
+                token_hash = sha256_hex({"execution_claim_token": execution_claim_token})
+                if (
+                    claim is None
+                    or claim.case_id != spec.case_id
+                    or claim.terminal_status is not None
+                    or not secure_equal(claim.token_hash, token_hash)
+                ):
+                    raise Conflict(
+                        "outbox_execution_claim_lost",
+                        "Only the current analyst execution claim owner may commit analysis state.",
+                    )
             existing = self._idempotency.get(spec.idempotency_key)
             if existing:
                 if existing.fingerprint != spec.fingerprint:
@@ -585,6 +648,113 @@ class InMemoryRepository:
                 }
             )
             self._outboxes[outbox_id] = updated
+            return self._clone(updated)
+
+    def claim_outbox_execution(
+        self,
+        outbox_id: str,
+        *,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> ExecutionClaimResult:
+        token_hash = sha256_hex({"execution_claim_token": claim_token})
+        with self._lock:
+            outbox = self._outboxes.get(outbox_id)
+            if not outbox:
+                raise NotFound("Outbox command")
+            if outbox.kind != OutboxKind.ANALYZE_CASE:
+                raise Conflict(
+                    "outbox_execution_claim_not_allowed",
+                    "Execution claims are reserved for analyst outbox commands.",
+                )
+            if outbox.status in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+                raise Conflict(
+                    "outbox_execution_terminal",
+                    "A terminal outbox command cannot acquire an execution claim.",
+                )
+            existing = self._execution_claims.get(outbox_id)
+            if existing and existing.terminal_status is not None:
+                raise Conflict(
+                    "outbox_execution_claim_terminal",
+                    "The analyst execution claim is already terminal.",
+                )
+            if existing and existing.lease_expires_at > claimed_at:
+                return ExecutionClaimResult(
+                    disposition=ExecutionClaimDisposition.IN_PROGRESS,
+                    claim=self._clone(existing),
+                )
+            recovery_required = existing is not None
+            claim = OutboxExecutionClaim(
+                outbox_id=outbox_id,
+                case_id=outbox.case_id,
+                token_hash=token_hash,
+                claimed_at=claimed_at,
+                lease_expires_at=lease_expires_at,
+                recovery_required=recovery_required,
+            )
+            self._execution_claims[outbox_id] = claim
+            return ExecutionClaimResult(
+                disposition=(
+                    ExecutionClaimDisposition.STALE_RECOVERY
+                    if recovery_required
+                    else ExecutionClaimDisposition.ACQUIRED
+                ),
+                claim=self._clone(claim),
+            )
+
+    def mark_outbox_execution(
+        self,
+        outbox_id: str,
+        status: OutboxStatus,
+        *,
+        claim_token: str,
+        completed_at: datetime,
+        failure_stage: OutboxFailureStage | None = None,
+        failure_code: str | None = None,
+    ) -> OutboxRecord:
+        if status not in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+            raise ValueError("execution terminal status must be COMPLETE or FAILED")
+        if status == OutboxStatus.FAILED and failure_stage != OutboxFailureStage.EXECUTE:
+            raise ValueError("failed execution claims require the EXECUTE failure stage")
+        if status == OutboxStatus.COMPLETE and (failure_stage is not None or failure_code is not None):
+            raise ValueError("completed execution claims cannot include failure metadata")
+        token_hash = sha256_hex({"execution_claim_token": claim_token})
+        with self._lock:
+            current = self._outboxes.get(outbox_id)
+            if not current:
+                raise NotFound("Outbox command")
+            claim = self._execution_claims.get(outbox_id)
+            if claim is None or not secure_equal(claim.token_hash, token_hash):
+                raise Conflict(
+                    "outbox_execution_claim_lost",
+                    "Only the current analyst execution claim owner may write a terminal result.",
+                )
+            if claim.terminal_status is not None:
+                if claim.terminal_status == status and current.status == status:
+                    return self._clone(current)
+                raise Conflict(
+                    "outbox_execution_claim_terminal",
+                    "The analyst execution claim is already terminal.",
+                )
+            if current.status in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+                raise Conflict(
+                    "outbox_execution_terminal_mismatch",
+                    "The outbox terminal state is not bound to the active execution claim.",
+                )
+            updated = current.model_copy(
+                update={
+                    "status": status,
+                    "completed_at": completed_at,
+                    "failure_stage": failure_stage if status == OutboxStatus.FAILED else None,
+                    "failure_code": failure_code if status == OutboxStatus.FAILED else None,
+                }
+            )
+            terminal_claim = claim.model_copy(
+                update={"terminal_status": status, "completed_at": completed_at}
+            )
+            self._outboxes[outbox_id] = updated
+            self._execution_claims[outbox_id] = terminal_claim
             return self._clone(updated)
 
     def record_outbox_replay(
@@ -1029,6 +1199,7 @@ class FirestoreRepository:
                 refs_by_path[row.reference.path] = row.reference
             for suffix in (
                 "outbox",
+                "analysisExecutionClaims",
                 "handoffs",
                 "tokens",
                 "claimLinks",
@@ -1211,13 +1382,46 @@ class FirestoreRepository:
             raise NotFound("Custody event")
         return EventRecord.model_validate(row.to_dict())
 
-    def apply_mutation(self, spec: MutationSpec) -> AppliedMutation:
+    def apply_mutation(
+        self,
+        spec: MutationSpec,
+        *,
+        execution_claim_outbox_id: str | None = None,
+        execution_claim_token: str | None = None,
+    ) -> AppliedMutation:
+        if (execution_claim_outbox_id is None) != (execution_claim_token is None):
+            raise ValueError("execution claim outbox ID and token must be supplied together")
         case_ref = self._collection("passports").document(spec.case_id)
         idem_ref = self._collection("idempotency").document(sha256_hex(spec.idempotency_key))
+        claim_ref = (
+            self._collection("analysisExecutionClaims").document(execution_claim_outbox_id)
+            if execution_claim_outbox_id is not None
+            else None
+        )
         transaction = self._client.transaction()
 
         @self._firestore.transactional
         def commit(txn):
+            if claim_ref is not None and execution_claim_token is not None:
+                claim_row = claim_ref.get(transaction=txn)
+                claim = (
+                    OutboxExecutionClaim.model_validate(claim_row.to_dict())
+                    if claim_row.exists
+                    else None
+                )
+                token_hash = sha256_hex(
+                    {"execution_claim_token": execution_claim_token}
+                )
+                if (
+                    claim is None
+                    or claim.case_id != spec.case_id
+                    or claim.terminal_status is not None
+                    or not secure_equal(claim.token_hash, token_hash)
+                ):
+                    raise Conflict(
+                        "outbox_execution_claim_lost",
+                        "Only the current analyst execution claim owner may commit analysis state.",
+                    )
             idem = idem_ref.get(transaction=txn)
             if idem.exists:
                 record = IdempotencyRecord.model_validate(idem.to_dict())
@@ -1354,6 +1558,139 @@ class FirestoreRepository:
             return updated
 
         return update(transaction)
+
+    def claim_outbox_execution(
+        self,
+        outbox_id: str,
+        *,
+        claim_token: str,
+        claimed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> ExecutionClaimResult:
+        outbox_ref = self._collection("outbox").document(outbox_id)
+        claim_ref = self._collection("analysisExecutionClaims").document(outbox_id)
+        token_hash = sha256_hex({"execution_claim_token": claim_token})
+        transaction = self._client.transaction()
+
+        @self._firestore.transactional
+        def claim(txn):
+            outbox_row = outbox_ref.get(transaction=txn)
+            claim_row = claim_ref.get(transaction=txn)
+            if not outbox_row.exists:
+                raise NotFound("Outbox command")
+            outbox = OutboxRecord.model_validate(outbox_row.to_dict())
+            if outbox.kind != OutboxKind.ANALYZE_CASE:
+                raise Conflict(
+                    "outbox_execution_claim_not_allowed",
+                    "Execution claims are reserved for analyst outbox commands.",
+                )
+            if outbox.status in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+                raise Conflict(
+                    "outbox_execution_terminal",
+                    "A terminal outbox command cannot acquire an execution claim.",
+                )
+            existing = (
+                OutboxExecutionClaim.model_validate(claim_row.to_dict())
+                if claim_row.exists
+                else None
+            )
+            if existing and existing.terminal_status is not None:
+                raise Conflict(
+                    "outbox_execution_claim_terminal",
+                    "The analyst execution claim is already terminal.",
+                )
+            if existing and existing.lease_expires_at > claimed_at:
+                return ExecutionClaimResult(
+                    disposition=ExecutionClaimDisposition.IN_PROGRESS,
+                    claim=existing,
+                )
+            recovery_required = existing is not None
+            replacement = OutboxExecutionClaim(
+                outbox_id=outbox_id,
+                case_id=outbox.case_id,
+                token_hash=token_hash,
+                claimed_at=claimed_at,
+                lease_expires_at=lease_expires_at,
+                recovery_required=recovery_required,
+            )
+            txn.set(claim_ref, self._storage(replacement))
+            return ExecutionClaimResult(
+                disposition=(
+                    ExecutionClaimDisposition.STALE_RECOVERY
+                    if recovery_required
+                    else ExecutionClaimDisposition.ACQUIRED
+                ),
+                claim=replacement,
+            )
+
+        return claim(transaction)
+
+    def mark_outbox_execution(
+        self,
+        outbox_id: str,
+        status: OutboxStatus,
+        *,
+        claim_token: str,
+        completed_at: datetime,
+        failure_stage: OutboxFailureStage | None = None,
+        failure_code: str | None = None,
+    ) -> OutboxRecord:
+        if status not in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+            raise ValueError("execution terminal status must be COMPLETE or FAILED")
+        if status == OutboxStatus.FAILED and failure_stage != OutboxFailureStage.EXECUTE:
+            raise ValueError("failed execution claims require the EXECUTE failure stage")
+        if status == OutboxStatus.COMPLETE and (failure_stage is not None or failure_code is not None):
+            raise ValueError("completed execution claims cannot include failure metadata")
+        outbox_ref = self._collection("outbox").document(outbox_id)
+        claim_ref = self._collection("analysisExecutionClaims").document(outbox_id)
+        token_hash = sha256_hex({"execution_claim_token": claim_token})
+        transaction = self._client.transaction()
+
+        @self._firestore.transactional
+        def finish(txn):
+            outbox_row = outbox_ref.get(transaction=txn)
+            claim_row = claim_ref.get(transaction=txn)
+            if not outbox_row.exists:
+                raise NotFound("Outbox command")
+            current = OutboxRecord.model_validate(outbox_row.to_dict())
+            claim = (
+                OutboxExecutionClaim.model_validate(claim_row.to_dict())
+                if claim_row.exists
+                else None
+            )
+            if claim is None or not secure_equal(claim.token_hash, token_hash):
+                raise Conflict(
+                    "outbox_execution_claim_lost",
+                    "Only the current analyst execution claim owner may write a terminal result.",
+                )
+            if claim.terminal_status is not None:
+                if claim.terminal_status == status and current.status == status:
+                    return current
+                raise Conflict(
+                    "outbox_execution_claim_terminal",
+                    "The analyst execution claim is already terminal.",
+                )
+            if current.status in {OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+                raise Conflict(
+                    "outbox_execution_terminal_mismatch",
+                    "The outbox terminal state is not bound to the active execution claim.",
+                )
+            updated = current.model_copy(
+                update={
+                    "status": status,
+                    "completed_at": completed_at,
+                    "failure_stage": failure_stage if status == OutboxStatus.FAILED else None,
+                    "failure_code": failure_code if status == OutboxStatus.FAILED else None,
+                }
+            )
+            terminal_claim = claim.model_copy(
+                update={"terminal_status": status, "completed_at": completed_at}
+            )
+            txn.set(outbox_ref, self._storage(updated))
+            txn.set(claim_ref, self._storage(terminal_claim))
+            return updated
+
+        return finish(transaction)
 
     def record_outbox_replay(
         self,

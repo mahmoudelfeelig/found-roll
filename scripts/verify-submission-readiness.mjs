@@ -13,11 +13,27 @@ const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepoRoot = path.resolve(path.dirname(scriptPath), "..");
 const maxJsonBytes = 1024 * 1024;
 const maxArtifactBytes = 64 * 1024 * 1024;
+const preflightFreshnessMilliseconds = 24 * 60 * 60 * 1000;
+const operationalPreflightFreshnessMilliseconds = 10 * 60 * 1000;
+const preflightFutureSkewMilliseconds = 5 * 60 * 1000;
 const sha256Pattern = /^[a-f0-9]{64}$/i;
 const commitPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{1,255}$/;
 const tagPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+const projectNumberPattern = /^\d{6,20}$/;
+const bucketNamePattern = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
+const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
+const expectedGoogleCloudResourceIdentity = Object.freeze({
+  schema_version: "1",
+  kind: "found-roll-google-cloud-resource-identity",
+  project_id: "found-roll-agentic-20260830",
+  project_number: "1061926987746",
+  project_created_at_utc: "2026-08-29T22:58:52.064Z",
+  evidence_bucket: "found-roll-agentic-20260830-found-roll-evidence",
+  dedicated_project_label_key: "found-roll-purpose",
+  dedicated_project_label_value: "dedicated-hackathon-demo",
+});
 const allowedFrictionModes = new Set(["first_person_lived", "first_person_observed", "research_informed"]);
 const allowedLicenseDecisions = new Set(["all_rights_reserved", "open_source"]);
 const allowedOpenSourceSpdxIdentifiers = new Set(["MIT"]);
@@ -38,7 +54,7 @@ const bearerPattern = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/i;
 const claimantLinkPattern = /\bfrcl_[A-Za-z0-9_-]+\b/i;
 const privateKeyPattern = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const sensitiveQueryKeyPattern = /^(?:access_token|auth|authorization|credential|expires|googleaccessid|key|password|secret|signature|token|x-goog-.+|x-amz-.+)$/i;
-const requiredFrozenFilePaths = [
+export const requiredFrozenFilePaths = [
   "README.md",
   "LICENSE",
   "NOTICE.md",
@@ -68,10 +84,12 @@ const requiredFrozenFilePaths = [
   "artifacts/verification/service-client-http-smoke-receipt.json",
   "artifacts/verification/frontend-build-manifest.json",
   "scripts/prepare-canonical-run.ps1",
+  "scripts/verify-submission-readiness.mjs",
   "docs/architecture.md",
   "docs/architecture-diagram.manifest.json",
   "docs/architecture-diagram.mmd",
   "docs/architecture-diagram.png",
+  "docs/google-cloud-resource-identity.json",
   "docs/deployment.md",
   "docs/devpost-submission.md",
   "docs/demo-script.md",
@@ -184,6 +202,14 @@ function requireSha256(value, fieldPath, failures) {
   return true;
 }
 
+function requireNonNegativeInteger(value, fieldPath, failures) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    addFailure(failures, "NON_NEGATIVE_INTEGER_REQUIRED", `${fieldPath} must be a non-negative safe integer.`);
+    return false;
+  }
+  return true;
+}
+
 function requireUtcTimestamp(value, fieldPath, failures) {
   if (typeof value !== "string" || !/Z$/i.test(value) || Number.isNaN(Date.parse(value))) {
     addFailure(failures, "UTC_TIMESTAMP_REQUIRED", `${fieldPath} must be an ISO-8601 UTC timestamp ending in Z.`);
@@ -198,6 +224,215 @@ function requireUtcInstant(value, fieldPath, failures) {
     return false;
   }
   return true;
+}
+
+function validateReceiptBinding(binding, fieldPath, failures) {
+  if (!checkObject(binding, fieldPath, ["path", "sha256"], failures)) return;
+  requireIdentifier(binding.path, `${fieldPath}.path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(binding.sha256, `${fieldPath}.sha256`, failures);
+}
+
+function validateGoogleCloudRecord(googleCloud, failures, { requireDeploymentReady = true } = {}) {
+  if (!checkObject(googleCloud, "release_record.google_cloud", [
+    "project_id",
+    "project_number",
+    "project_created_at_utc",
+    "evidence_bucket",
+    "dedicated_project_confirmed",
+    "dedicated_project_label_key",
+    "dedicated_project_label_value",
+    "billing_enabled_confirmed",
+    "billing_account_type",
+    "free_trial_remaining_credit_confirmed",
+    "free_trial_remaining_time_confirmed",
+    "paid_activation_absent_confirmed",
+    "cloud_run_spend_cap_confirmed",
+    "agent_platform_spend_cap_confirmed",
+    "required_apis_enabled_confirmed",
+    "iam_ready_confirmed",
+    "quota_ready_confirmed",
+    "resource_identity",
+    "canonical_revision_images",
+    "project_storage_receipts",
+    "preflight_receipts",
+  ], failures)) return;
+
+  requireIdentifier(googleCloud.project_id, "release_record.google_cloud.project_id", failures, projectIdPattern);
+  requireIdentifier(googleCloud.project_number, "release_record.google_cloud.project_number", failures, projectNumberPattern);
+  requireUtcTimestamp(googleCloud.project_created_at_utc, "release_record.google_cloud.project_created_at_utc", failures);
+  requireIdentifier(googleCloud.evidence_bucket, "release_record.google_cloud.evidence_bucket", failures, bucketNamePattern);
+  if (googleCloud.evidence_bucket !== `${googleCloud.project_id}-found-roll-evidence`) {
+    addFailure(failures, "EVIDENCE_BUCKET_BINDING", "release_record.google_cloud.evidence_bucket must be the dedicated project-derived Found Roll evidence bucket.");
+  }
+  if (
+    googleCloud.dedicated_project_label_key !== "found-roll-purpose"
+    || googleCloud.dedicated_project_label_value !== "dedicated-hackathon-demo"
+  ) {
+    addFailure(failures, "DEDICATED_PROJECT_LABEL", "release_record.google_cloud must bind the exact Found Roll dedicated-project label.");
+  }
+  if (googleCloud.billing_account_type !== "free_trial") {
+    addFailure(failures, "FREE_TRIAL_REQUIRED", "release_record.google_cloud.billing_account_type must be exactly free_trial; paid, upgraded, expired, absent, or unverified billing is not authorized.");
+  }
+  for (const key of [
+    "dedicated_project_confirmed",
+    "billing_enabled_confirmed",
+    "free_trial_remaining_credit_confirmed",
+    "free_trial_remaining_time_confirmed",
+    "paid_activation_absent_confirmed",
+    "cloud_run_spend_cap_confirmed",
+    "agent_platform_spend_cap_confirmed",
+  ]) {
+    requireTrue(googleCloud[key], `release_record.google_cloud.${key}`, failures);
+  }
+  for (const key of ["required_apis_enabled_confirmed", "iam_ready_confirmed", "quota_ready_confirmed"]) {
+    if (requireDeploymentReady) {
+      requireTrue(googleCloud[key], `release_record.google_cloud.${key}`, failures);
+    } else if (typeof googleCloud[key] !== "boolean") {
+      addFailure(failures, "RECORD_SCHEMA", `release_record.google_cloud.${key} must be a boolean.`);
+    }
+  }
+
+  validateReceiptBinding(googleCloud.resource_identity, "release_record.google_cloud.resource_identity", failures);
+  if (googleCloud.resource_identity?.path !== "docs/google-cloud-resource-identity.json") {
+    addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", "release_record.google_cloud.resource_identity must bind the tracked dedicated-project identity document.");
+  }
+  if (requireDeploymentReady && checkObject(
+    googleCloud.canonical_revision_images,
+    "release_record.google_cloud.canonical_revision_images",
+    ["app", "simulator"],
+    failures,
+  )) {
+    for (const [key, expectedService] of [["app", "found-roll-app"], ["simulator", "found-roll-simulator"]]) {
+      const binding = googleCloud.canonical_revision_images[key];
+      const fieldPath = `release_record.google_cloud.canonical_revision_images.${key}`;
+      if (!checkObject(binding, fieldPath, [
+        "project_id",
+        "project_number",
+        "region",
+        "service",
+        "service_resource",
+        "origin",
+        "revision",
+        "revision_resource",
+        "revision_created_at_utc",
+        "image_digest",
+        "image_package",
+        "image_resource",
+      ], failures)) continue;
+      const expectedRegion = "us-central1";
+      const expectedServiceResource = `projects/${googleCloud.project_number}/locations/${expectedRegion}/services/${expectedService}`;
+      const expectedRevisionResource = `${expectedServiceResource}/revisions/${binding.revision}`;
+      if (
+        binding.project_id !== googleCloud.project_id
+        || binding.project_number !== googleCloud.project_number
+        || binding.region !== expectedRegion
+        || binding.service !== expectedService
+        || binding.service_resource !== expectedServiceResource
+        || binding.revision_resource !== expectedRevisionResource
+      ) {
+        addFailure(failures, "CANONICAL_REVISION_IMAGE", `${fieldPath} must identify the exact dedicated-project Cloud Run service and revision resources.`);
+      }
+      requireIdentifier(binding.revision, `${fieldPath}.revision`, failures);
+      if (!new RegExp(`^${expectedService}-\\d{5}-[a-z0-9]{3}$`).test(String(binding.revision || ""))) {
+        addFailure(failures, "CANONICAL_REVISION_IMAGE", `${fieldPath}.revision must be an exact revision of ${expectedService}.`);
+      }
+      const origin = parseHttpsUrl(binding.origin, `${fieldPath}.origin`, failures);
+      if (origin && (binding.origin !== origin.origin || !origin.hostname.toLowerCase().endsWith(".run.app"))) {
+        addFailure(failures, "CANONICAL_REVISION_IMAGE", `${fieldPath}.origin must be the exact Cloud Run HTTPS status origin without a path.`);
+      }
+      requireUtcTimestamp(binding.revision_created_at_utc, `${fieldPath}.revision_created_at_utc`, failures);
+      if (!imageDigestPattern.test(String(binding.image_digest || ""))) {
+        addFailure(failures, "CANONICAL_REVISION_IMAGE", `${fieldPath}.image_digest must be an exact SHA-256 container digest.`);
+      }
+      const expectedImagePrefix = `${expectedRegion}-docker.pkg.dev/${googleCloud.project_id}/cloud-run-source-deploy/`;
+      const imagePackageSuffix = typeof binding.image_package === "string" ? binding.image_package.slice(expectedImagePrefix.length) : "";
+      if (
+        typeof binding.image_package !== "string"
+        || !binding.image_package.startsWith(expectedImagePrefix)
+        || !/^[^/:@\s]+$/.test(imagePackageSuffix)
+        || binding.image_resource !== `${binding.image_package}@${binding.image_digest}`
+      ) {
+        addFailure(failures, "CANONICAL_REVISION_IMAGE", `${fieldPath} must bind the exact dedicated-project Artifact Registry package and package@digest resource.`);
+      }
+    }
+  }
+  if (checkObject(googleCloud.project_storage_receipts, "release_record.google_cloud.project_storage_receipts", [
+    "after_app_source_deploy",
+    "after_simulator_source_deploy",
+  ], failures) && requireDeploymentReady) {
+    for (const key of ["after_app_source_deploy", "after_simulator_source_deploy"]) {
+      validateReceiptBinding(
+        googleCloud.project_storage_receipts[key],
+        `release_record.google_cloud.project_storage_receipts.${key}`,
+        failures,
+      );
+    }
+    const expectedPaths = {
+      after_app_source_deploy: "artifacts/private/storage-after-app-source-deploy.json",
+      after_simulator_source_deploy: "artifacts/private/storage-after-simulator-source-deploy.json",
+    };
+    for (const [key, expectedPath] of Object.entries(expectedPaths)) {
+      if (googleCloud.project_storage_receipts[key]?.path !== expectedPath) {
+        addFailure(failures, "PROJECT_STORAGE_RECEIPT", `release_record.google_cloud.project_storage_receipts.${key}.path must be ${expectedPath}.`);
+      }
+    }
+  }
+
+  if (checkObject(googleCloud.preflight_receipts, "release_record.google_cloud.preflight_receipts", [
+    "billing_overview",
+    "cloud_run_spend_cap",
+    "agent_platform_spend_cap",
+  ], failures)) {
+    for (const key of ["billing_overview", "cloud_run_spend_cap", "agent_platform_spend_cap"]) {
+      validateReceiptBinding(
+        googleCloud.preflight_receipts[key],
+        `release_record.google_cloud.preflight_receipts.${key}`,
+        failures,
+      );
+    }
+  }
+}
+
+async function validateGoogleCloudResourceIdentity(repoRoot, releaseRecord, failures) {
+  const relativePath = "docs/google-cloud-resource-identity.json";
+  const binding = releaseRecord?.google_cloud?.resource_identity;
+  const raw = await loadRepositoryFile(repoRoot, relativePath, "release_record.google_cloud.resource_identity.path", failures);
+  if (!raw) {
+    addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", `${relativePath} could not be read as a regular repository file.`);
+    return;
+  }
+  if (!isPlainObject(binding) || binding.path !== relativePath || !sha256Pattern.test(String(binding.sha256 || ""))) {
+    addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", "The release record must bind the tracked dedicated-project identity path and SHA-256.");
+  } else if (sha256(raw) !== binding.sha256.toLowerCase()) {
+    addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", "The tracked dedicated-project identity does not match its release-record SHA-256.");
+  }
+  let identity;
+  try {
+    identity = JSON.parse(raw.toString("utf8"));
+  } catch {
+    addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", `${relativePath} is not valid JSON.`);
+    return;
+  }
+  const identityKeys = Object.keys(expectedGoogleCloudResourceIdentity);
+  if (!checkObject(identity, "google_cloud_resource_identity", identityKeys, failures)) return;
+  for (const [key, expected] of Object.entries(expectedGoogleCloudResourceIdentity)) {
+    if (identity[key] !== expected) {
+      addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", `google_cloud_resource_identity.${key} does not match the pre-authorized dedicated project.`);
+    }
+  }
+  const releaseFields = {
+    project_id: releaseRecord?.google_cloud?.project_id,
+    project_number: releaseRecord?.google_cloud?.project_number,
+    project_created_at_utc: releaseRecord?.google_cloud?.project_created_at_utc,
+    evidence_bucket: releaseRecord?.google_cloud?.evidence_bucket,
+    dedicated_project_label_key: releaseRecord?.google_cloud?.dedicated_project_label_key,
+    dedicated_project_label_value: releaseRecord?.google_cloud?.dedicated_project_label_value,
+  };
+  for (const [key, releaseValue] of Object.entries(releaseFields)) {
+    if (identity[key] !== releaseValue) {
+      addFailure(failures, "GOOGLE_CLOUD_RESOURCE_IDENTITY", `release_record.google_cloud.${key} does not match the tracked dedicated-project identity.`);
+    }
+  }
 }
 
 function isReservedHostname(hostname) {
@@ -381,39 +616,7 @@ function validateReleaseRecord(record, failures) {
     requireTrue(record.friction_story.truthful_mode_confirmed, "release_record.friction_story.truthful_mode_confirmed", failures);
   }
 
-  if (checkObject(record.google_cloud, "release_record.google_cloud", [
-    "project_id",
-    "dedicated_project_confirmed",
-    "billing_enabled_confirmed",
-    "billing_account_type",
-    "free_trial_remaining_credit_confirmed",
-    "free_trial_remaining_time_confirmed",
-    "paid_activation_absent_confirmed",
-    "cloud_run_spend_cap_confirmed",
-    "agent_platform_spend_cap_confirmed",
-    "required_apis_enabled_confirmed",
-    "iam_ready_confirmed",
-    "quota_ready_confirmed",
-  ], failures)) {
-    requireIdentifier(record.google_cloud.project_id, "release_record.google_cloud.project_id", failures, projectIdPattern);
-    if (record.google_cloud.billing_account_type !== "free_trial") {
-      addFailure(failures, "FREE_TRIAL_REQUIRED", "release_record.google_cloud.billing_account_type must be exactly free_trial; paid, upgraded, expired, absent, or unverified billing is not authorized.");
-    }
-    for (const key of [
-      "dedicated_project_confirmed",
-      "billing_enabled_confirmed",
-      "free_trial_remaining_credit_confirmed",
-      "free_trial_remaining_time_confirmed",
-      "paid_activation_absent_confirmed",
-      "cloud_run_spend_cap_confirmed",
-      "agent_platform_spend_cap_confirmed",
-      "required_apis_enabled_confirmed",
-      "iam_ready_confirmed",
-      "quota_ready_confirmed",
-    ]) {
-      requireTrue(record.google_cloud[key], `release_record.google_cloud.${key}`, failures);
-    }
-  }
+  validateGoogleCloudRecord(record.google_cloud, failures);
 
   if (checkObject(record.hosted_project, "release_record.hosted_project", ["url", "clean_browser_verified", "judge_access_verified"], failures)) {
     parseHttpsUrl(record.hosted_project.url, "release_record.hosted_project.url", failures);
@@ -598,15 +801,36 @@ function resolvePrivateArtifact(repoRoot, value, fieldPath, failures) {
   return absolute;
 }
 
-async function readBoundedFile(filePath) {
-  const content = await readFile(filePath);
-  if (content.byteLength > maxJsonBytes) throw new Error("file too large");
-  return content;
-}
+async function readRegularFileWithin(rootPath, filePath, maximumBytes) {
+  const absoluteRoot = path.resolve(rootPath);
+  const absoluteFile = path.resolve(filePath);
+  const relative = path.relative(absoluteRoot, absoluteFile);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("file escaped its trusted root");
+  }
 
-async function readBoundedArtifact(filePath) {
-  const content = await readFile(filePath);
-  if (content.byteLength > maxArtifactBytes) throw new Error("artifact too large");
+  const rootStat = await lstat(absoluteRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("trusted root is not a regular directory");
+  }
+  const segments = relative.split(path.sep).filter(Boolean);
+  let current = absoluteRoot;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]);
+    const stat = await lstat(current);
+    if (stat.isSymbolicLink()) throw new Error("symbolic links are not accepted as release evidence");
+    if (index < segments.length - 1 && !stat.isDirectory()) throw new Error("file parent is not a directory");
+    if (index === segments.length - 1 && !stat.isFile()) throw new Error("release evidence is not a regular file");
+    if (index === segments.length - 1 && stat.size > maximumBytes) throw new Error("file too large");
+  }
+
+  const [realRoot, realFile] = await Promise.all([realpath(absoluteRoot), realpath(absoluteFile)]);
+  const realRelative = path.relative(realRoot, realFile);
+  if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new Error("file escaped its trusted root");
+  }
+  const content = await readFile(realFile);
+  if (content.byteLength > maximumBytes) throw new Error("file too large");
   return content;
 }
 
@@ -622,10 +846,7 @@ async function loadRepositoryFile(repoRoot, relativePath, fieldPath, failures) {
     return null;
   }
   try {
-    const [realFile, realRoot] = await Promise.all([realpath(absolute), realpath(repoRoot)]);
-    const realRelative = path.relative(realRoot, realFile);
-    if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) throw new Error("file escaped repository root");
-    return await readBoundedArtifact(realFile);
+    return await readRegularFileWithin(repoRoot, absolute, maxArtifactBytes);
   } catch {
     addFailure(failures, "FROZEN_FILE_UNREADABLE", `${fieldPath} could not be read as a bounded repository artifact.`);
     return null;
@@ -650,6 +871,7 @@ function inspectPng(raw) {
   let width = null;
   let height = null;
   let channels = null;
+  let colorType = null;
   let sawIdat = false;
   let sawIend = false;
   const idatParts = [];
@@ -667,7 +889,7 @@ function inspectPng(raw) {
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
       const bitDepth = data[8];
-      const colorType = data[9];
+      colorType = data[9];
       const compression = data[10];
       const filter = data[11];
       const interlace = data[12];
@@ -692,6 +914,11 @@ function inspectPng(raw) {
     const rowBytes = width * channels;
     let previousRow = Buffer.alloc(rowBytes);
     const distinctColors = new Set();
+    const pixelHasher = createHash("sha256");
+    const dimensionHeader = Buffer.allocUnsafe(8);
+    dimensionHeader.writeUInt32BE(width, 0);
+    dimensionHeader.writeUInt32BE(height, 4);
+    pixelHasher.update(dimensionHeader);
     const paeth = (left, above, upperLeft) => {
       const estimate = left + above - upperLeft;
       const leftDistance = Math.abs(estimate - left);
@@ -726,13 +953,37 @@ function inspectPng(raw) {
           if (distinctColors.size >= 32) break;
         }
       }
+      const normalizedRgba = Buffer.allocUnsafe(width * 4);
+      for (let pixel = 0; pixel < width; pixel += 1) {
+        const source = pixel * channels;
+        const target = pixel * 4;
+        if (colorType === 0) {
+          normalizedRgba[target] = decoded[source];
+          normalizedRgba[target + 1] = decoded[source];
+          normalizedRgba[target + 2] = decoded[source];
+          normalizedRgba[target + 3] = 255;
+        } else if (colorType === 2) {
+          normalizedRgba[target] = decoded[source];
+          normalizedRgba[target + 1] = decoded[source + 1];
+          normalizedRgba[target + 2] = decoded[source + 2];
+          normalizedRgba[target + 3] = 255;
+        } else if (colorType === 4) {
+          normalizedRgba[target] = decoded[source];
+          normalizedRgba[target + 1] = decoded[source];
+          normalizedRgba[target + 2] = decoded[source];
+          normalizedRgba[target + 3] = decoded[source + 1];
+        } else {
+          decoded.copy(normalizedRgba, target, source, source + 4);
+        }
+      }
+      pixelHasher.update(normalizedRgba);
       previousRow = decoded;
     }
     if (distinctColors.size < 8) return null;
+    return { width, height, pixelSha256: pixelHasher.digest("hex") };
   } catch {
     return null;
   }
-  return { width, height };
 }
 
 function validateDocumentationEvidence(rawByPath, failures) {
@@ -791,6 +1042,131 @@ function validateDocumentationEvidence(rawByPath, failures) {
 
   const deployment = decode("docs/deployment.md");
   const deploymentMetrics = metrics(deployment);
+  const powerShellStatements = [];
+  const gcloudOutsidePowerShell = [];
+  let activeFence = null;
+  for (const rawLine of deployment.split(/\r?\n/)) {
+    const fenceMatch = rawLine.match(/^\s*```([^\s`]*)/);
+    if (fenceMatch) {
+      activeFence = activeFence === null ? fenceMatch[1].toLowerCase() : null;
+      continue;
+    }
+    const commandShapedGcloud = /^\s*(?:`{1,3}\s*)?(?:\$[A-Za-z_][A-Za-z0-9_.]*\s*=\s*)?(?:\(+\s*\[string\]\s*\(?\s*)*(?:@\(&\s*|&\s*)?gcloud\s+[a-z]/i.test(rawLine);
+    if (commandShapedGcloud && activeFence !== "powershell") gcloudOutsidePowerShell.push(rawLine.trim());
+  }
+  for (const block of deployment.matchAll(/^```powershell[^\r\n]*\r?\n([\s\S]*?)^```[ \t]*$/gmi)) {
+    let logicalStatement = "";
+    for (const rawLine of block[1].split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || (!logicalStatement && line.startsWith("#"))) continue;
+      const continued = /`\s*$/.test(rawLine);
+      const segment = rawLine.replace(/`\s*$/, "").trim();
+      logicalStatement = `${logicalStatement}${logicalStatement ? " " : ""}${segment}`;
+      if (!continued) {
+        powerShellStatements.push(logicalStatement);
+        logicalStatement = "";
+      }
+    }
+    if (logicalStatement) powerShellStatements.push(logicalStatement);
+  }
+  const readOnlyGcloudPattern = /\bgcloud\s+(?:auth\s+(?:login|list|print-access-token)|config\s+(?:set|get-value|list)|projects\s+describe|billing\s+projects\s+describe|asset\s+list|builds\s+(?:list|describe)|iam\s+service-accounts\s+keys\s+list|secrets\s+(?:locations\s+list|list|versions\s+(?:list|access|describe))|artifacts\s+(?:repositories\s+list|docker\s+images\s+list)|run\s+(?:services|revisions)\s+describe|firestore\s+databases\s+(?:list|describe)|storage\s+(?:ls|buckets\s+(?:list|describe)|objects\s+list|du)|tasks\s+queues\s+describe)(?=\s|$|\))/i;
+  const approvedMutatingGcloudPattern = /\bgcloud\s+(?:services\s+enable|iam\s+service-accounts\s+(?:create|add-iam-policy-binding)|projects\s+(?:update|add-iam-policy-binding|delete)|firestore\s+databases\s+create|storage\s+buckets\s+(?:create|update|add-iam-policy-binding)|tasks\s+queues\s+(?:create|update|pause)|secrets\s+(?:create|add-iam-policy-binding|versions\s+(?:add|destroy))|artifacts\s+docker\s+images\s+delete|run\s+(?:deploy|services\s+(?:update|update-traffic)))(?=\s|$|\))/i;
+  const mutatingGcloudViolations = [];
+  const unapprovedGcloudViolations = [];
+  const sensitiveGcloudViolations = [];
+  for (let index = 0; index < powerShellStatements.length; index += 1) {
+    const statement = powerShellStatements[index];
+    if (/"(?:`.|[^"`])*\$\(\s*(?:&\s*)?gcloud\s+[a-z]/i.test(statement)) {
+      unapprovedGcloudViolations.push(`nested expandable-string gcloud invocation: ${statement}`);
+      continue;
+    }
+    const commandProjection = statement
+      .replace(/'(?:''|[^'])*'/g, "''")
+      .replace(/"(?:`.|[^"`])*"/g, '""')
+      .replace(/\s+#.*$/, "");
+    const gcloudInvocations = [...commandProjection.matchAll(/\bgcloud\s+[a-z]/gi)];
+    if (gcloudInvocations.length === 0) continue;
+    if (gcloudInvocations.length !== 1) {
+      mutatingGcloudViolations.push(`compound or ambiguous gcloud statement: ${statement}`);
+      continue;
+    }
+    if (/\bgcloud\s+auth\s+print-access-token(?=\s|$|\))/i.test(commandProjection)) {
+      if (!/^\$AccessTokenLines\s*=\s*@\(&\s*gcloud\s+auth\s+print-access-token\)$/i.test(commandProjection)) {
+        sensitiveGcloudViolations.push(`access token is not captured only in memory: ${statement}`);
+      }
+    }
+    if (readOnlyGcloudPattern.test(commandProjection)) continue;
+    if (!approvedMutatingGcloudPattern.test(commandProjection)) {
+      unapprovedGcloudViolations.push(`unapproved gcloud command shape: ${statement}`);
+      continue;
+    }
+    if (!/(?:^|\s)--project=\$(?:ProjectId|ExpectedProjectId)(?=\s|$|\))/.test(commandProjection)) {
+      mutatingGcloudViolations.push(`missing exact project flag: ${statement}`);
+    }
+    if (!/^Assert-(?:Standalone)?LastGcloudSuccess\b/.test(powerShellStatements[index + 1] || "")) {
+      mutatingGcloudViolations.push(`missing immediate checked failure: ${statement}`);
+    }
+  }
+  const secretVersionAddPreflightViolations = [];
+  const buildInventoryCommandViolations = [];
+  for (let index = 0; index < powerShellStatements.length; index += 1) {
+    if (!/\bgcloud\s+secrets\s+versions\s+add\b/i.test(powerShellStatements[index])) continue;
+    if (!/^Assert-GoogleCloudPreflight\s+-PhaseName\s+"secret-version-upload-\$\(\$Entry\.Key\)"$/i.test(powerShellStatements[index - 1] || "")) {
+      secretVersionAddPreflightViolations.push(powerShellStatements[index]);
+    }
+  }
+  for (const statement of powerShellStatements) {
+    if (/\bgcloud\s+builds\s+list(?=\s|$)/i.test(statement) && (
+      !/(?:^|\s)--project=\$ProjectId(?=\s|$|\))/.test(statement)
+      || !/(?:^|\s)--region=\$BuildLocation(?=\s|$|\))/.test(statement)
+      || !/(?:^|\s)--limit=unlimited(?=\s|$|\))/.test(statement)
+    )) buildInventoryCommandViolations.push(statement);
+    if (/\bgcloud\s+builds\s+describe(?=\s|$)/i.test(statement) && (
+      !/(?:^|\s)--project=\$ProjectId(?=\s|$|\))/.test(statement)
+      || !/(?:^|\s)--region=\$BuildLocation(?=\s|$|\))/.test(statement)
+    )) buildInventoryCommandViolations.push(statement);
+  }
+  const cloudRunDeployCount = (deployment.match(/^[ \t]*gcloud run deploy\b/gm) || []).length;
+  const gatedCloudRunDeployCount = (
+    deployment.match(/^[ \t]*Assert-GoogleCloudPreflight\s+-PhaseName\s+"[^"]+"[ \t]*\r?\n[ \t]*gcloud run deploy\b/gm) || []
+  ).length;
+  const projectPinnedCloudRunDeployCount = (
+    deployment.match(/^[ \t]*gcloud run deploy\b[^\r\n]*\r?\n[ \t]*--project=\$ProjectId\b/gm) || []
+  ).length;
+  const cloudRunServiceUpdateCount = (deployment.match(/^[ \t]*gcloud run services update\s+\$AppService\b/gm) || []).length;
+  const gatedCloudRunServiceUpdateCount = (
+    deployment.match(/^[ \t]*Assert-GoogleCloudPreflight\s+-PhaseName\s+"[^"]+"[ \t]*\r?\n[ \t]*gcloud run services update\s+\$AppService\b/gm) || []
+  ).length;
+  const storageAuditReceiptCallCount = (
+    deployment.match(/^[ \t]*\$[A-Za-z]+StorageBinding\s*=\s*Write-ProjectStorageAuditReceipt\b/gm) || []
+  ).length;
+  const rollbackDeclarationCount = (deployment.match(/\$RetainedRollbackRevisionDeclaration\s*=/g) || []).length;
+  const secretUploadStateCheckCount = (deployment.match(/^[ \t]*Assert-SecretUploadState[ \t]*$/gm) || []).length;
+  const analysisLeaseMatch = deployment.match(/ANALYSIS_EXECUTION_LEASE_SECONDS\s*=\s*(\d+)/);
+  const queueMinimumBackoffMatch = deployment.match(/--min-backoff=(\d+)s/);
+  const analysisLeaseSeconds = analysisLeaseMatch ? Number.parseInt(analysisLeaseMatch[1], 10) : null;
+  const queueMinimumBackoffSeconds = queueMinimumBackoffMatch ? Number.parseInt(queueMinimumBackoffMatch[1], 10) : null;
+  const projectDescribeIndex = deployment.indexOf("$ProjectState = gcloud projects describe $ProjectId");
+  const projectLabelIndex = deployment.indexOf("gcloud projects update $ProjectId --update-labels");
+  const preservingJsonParserCount = (deployment.match(/^function\s+ConvertFrom-JsonPreservingStrings\s*\{/gmi) || []).length;
+  const preservingJsonVersionGateCount = (deployment.match(/\$PSVersionTable\.PSVersion\s+-lt\s+\[version\]'7\.5'/g) || []).length;
+  const preservingJsonCapabilityCheckCount = (deployment.match(/Parameters\.ContainsKey\('DateKind'\)/g) || []).length;
+  const preservingJsonGetCommandCount = (
+    deployment.match(/\$JsonConvertCommand\s*=\s*Get-Command\s+ConvertFrom-Json\s+-ErrorAction\s+Stop/g) || []
+  ).length;
+  const preservingJsonImplementationCount = (
+    deployment.match(/Microsoft\.PowerShell\.Utility\\ConvertFrom-Json\s+-InputObject\s+\(\$JsonLines\s+-join\s+"`n"\)\s+-DateKind\s+String/g) || []
+  ).length;
+  const suppressedJsonLineAddCount = (
+    deployment.match(/process\s*\{\s*\[void\]\$JsonLines\.Add\(\$Json\)\s*\}/g) || []
+  ).length;
+  const rawJsonPipelineCount = (deployment.match(/\|\s*ConvertFrom-Json(?!PreservingStrings)\b/gi) || []).length;
+  const unqualifiedConvertFromJsonCommandCount = (
+    deployment.match(/(?<![A-Za-z0-9_\\-])ConvertFrom-Json(?!PreservingStrings)(?=\s|$)/gi) || []
+  ).length;
+  const qualifiedConvertFromJsonCommandCount = (
+    deployment.match(/Microsoft\.PowerShell\.Utility\\ConvertFrom-Json\b/gi) || []
+  ).length;
   if (
     deployment.length < 20_000
     || deploymentMetrics.lineCount < 250
@@ -806,6 +1182,18 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/not Always Free/i.test(deployment)
     || !/billing_account_type:\s*"free_trial"/i.test(deployment)
     || !/Preview spend-cap/i.test(deployment)
+    || !/--preflight-only/i.test(deployment)
+    || !/GOOGLE CLOUD PREFLIGHT: PASS/i.test(deployment)
+    || !/SUBMISSION READINESS: PASS/i.test(deployment)
+    || !/GOOGLE CLOUD TEARDOWN IDENTITY: PASS/i.test(deployment)
+    || !/billing_account_name_sha256/i.test(deployment)
+    || !/redacted_capture_sha256/i.test(deployment)
+    || cloudRunDeployCount === 0
+    || gatedCloudRunDeployCount !== cloudRunDeployCount
+    || projectPinnedCloudRunDeployCount !== cloudRunDeployCount
+    || cloudRunServiceUpdateCount === 0
+    || gatedCloudRunServiceUpdateCount !== cloudRunServiceUpdateCount
+    || !/^[ \t]*Assert-GoogleCloudPreflight\s+-PhaseName\s+"api-enablement"[ \t]*\r?\n[ \t]*gcloud services enable\b/m.test(deployment)
     || !/--scaling=auto/i.test(deployment)
     || !/--max=1/i.test(deployment)
     || !/--max-instances=1/i.test(deployment)
@@ -813,14 +1201,117 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/--timeout=20s/i.test(deployment)
     || !/--max-attempts=3/i.test(deployment)
     || !/--max-retry-duration=1s/i.test(deployment)
+    || !Number.isInteger(analysisLeaseSeconds)
+    || !Number.isInteger(queueMinimumBackoffSeconds)
+    || analysisLeaseSeconds >= queueMinimumBackoffSeconds
     || !/gcloud\s+secrets\s+versions\s+destroy/i.test(deployment)
     || !/gcloud\s+artifacts\s+docker\s+images\s+delete/i.test(deployment)
-    || !/gcloud\s+storage\s+du\s+--summarize\s+--all-versions/i.test(deployment)
+    || !/gcloud\s+storage\s+objects\s+list/i.test(deployment)
+    || !/--buckets\s+--soft-deleted\s+--exhaustive\s+--full/i.test(deployment)
     || !/--soft-delete-duration=0/i.test(deployment)
     || !/--clear-soft-delete/i.test(deployment)
+    || !/--soft-deleted\s+--exhaustive/i.test(deployment)
     || !/softDeletePolicy/i.test(deployment)
+    || !/Assert-ProjectStorageBound/i.test(deployment)
+    || storageAuditReceiptCallCount !== cloudRunDeployCount
+    || !/Write-ProjectStorageAuditReceipt\s+-Phase\s+after_app_source_deploy/i.test(deployment)
+    || !/Write-ProjectStorageAuditReceipt\s+-Phase\s+after_simulator_source_deploy/i.test(deployment)
+    || !/Get-CanonicalJsonHash/i.test(deployment)
+    || !/artifact_repositories/i.test(deployment)
+    || !/artifact_images/i.test(deployment)
+    || !/revision_images/i.test(deployment)
+    || !/ConvertTo-SanitizedObjectInventory/i.test(deployment)
+    || !/all_version_objects/i.test(deployment)
+    || !/object_id_sha256/i.test(deployment)
+    || !/--all-versions/i.test(deployment)
+    || !/canonical_revision_images/i.test(deployment)
+    || !/Non-Docker Artifact Registry repository/i.test(deployment)
+    || !/function\s+Get-ProjectWideSecretDirectInventory\b/i.test(deployment)
+    || !/gcloud\s+secrets\s+locations\s+list\s+--project=\$ProjectId\s+--limit=unlimited/i.test(deployment)
+    || !/gcloud\s+secrets\s+list\s+--project=\$ProjectId\s+--location=\$SecretLocation\s+--limit=unlimited/i.test(deployment)
+    || !/gcloud\s+secrets\s+versions\s+list\s+\$SecretName\s+--project=\$ProjectId\s+--limit=unlimited/i.test(deployment)
+    || !/\$MissingSecretIds\s*=\s*@\(\$ExpectedSecretIds/i.test(deployment)
+    || !/@\(Compare-Object\s+\$LiveSecretIds\s+\$ExpectedSecretIds\)\.Count/i.test(deployment)
+    || !/function\s+Assert-SecretUploadState\b/i.test(deployment)
+    || secretUploadStateCheckCount < 4
+    || !/function\s+Assert-AllSecretInputValues\b/i.test(deployment)
+    || !/function\s+Test-ExactSecretFileBytes\b/i.test(deployment)
+    || !/gcloud\s+secrets\s+versions\s+access\s+\$\(\$SecretVersions\[\$Entry\.Key\]\)[^\r\n]*--out-file=\$ComparePath/i.test(deployment)
+    || !/\$SecretsNeedingUpload\s*=\s*\[System\.Collections\.Generic\.HashSet\[string\]\]/i.test(deployment)
+    || !/gcloud\s+secrets\s+versions\s+add\s+\$Entry\.Key\s+--project=\$ProjectId/i.test(deployment)
+    || mutatingGcloudViolations.length > 0
+    || unapprovedGcloudViolations.length > 0
+    || sensitiveGcloudViolations.length > 0
+    || secretVersionAddPreflightViolations.length > 0
+    || buildInventoryCommandViolations.length > 0
+    || gcloudOutsidePowerShell.length > 0
+    || /\bgcloud\s+storage\s+rm\b/i.test(deployment)
+    || !/function\s+Get-AllCloudBuildLocations\b/i.test(deployment)
+    || !/cloudbuild\.googleapis\.com\/v2\/projects\/\$ProjectId\/locations\?pageSize=1000/i.test(deployment)
+    || !/nextPageToken/i.test(deployment)
+    || !/\$Headers\.Clear\(\)/i.test(deployment)
+    || !/\$AccessToken\s*=\s*\$null/i.test(deployment)
+    || !/gcloud\s+asset\s+list\s+--project=\$ProjectId\s+--asset-types="cloudbuild\.googleapis\.com\/Build"[^\r\n]*--limit=unlimited/i.test(deployment)
+    || /gcloud\s+asset\s+search-all-resources[^\r\n]*cloudbuild\.googleapis\.com\/Build/i.test(deployment)
+    || !/gcloud\s+builds\s+list\s+--project=\$ProjectId\s+--region=\$BuildLocation\s+--limit=unlimited/i.test(deployment)
+    || !/gcloud\s+builds\s+describe\s+\$BuildId\s+--project=\$ProjectId\s+--region=\$BuildLocation/i.test(deployment)
+    || !/BuildState\.projectId\s+-ne\s+\$ProjectId/i.test(deployment)
+    || !/run\.googleapis\.com\/build-id/i.test(deployment)
+    || !/run\.googleapis\.com\/build-name/i.test(deployment)
+    || !/run\.googleapis\.com\/build-source-location/i.test(deployment)
+    || !/source_deploy_build_binding_source/i.test(deployment)
+    || !/revision_image_resource/i.test(deployment)
+    || !/function\s+Resolve-ExactArtifactImageResource\b/i.test(deployment)
+    || !/EmbeddedDigestMatch\.Groups\[1\]\.Value\s+-ne\s+\$ResolvedDigest/i.test(deployment)
+    || !/function\s+ConvertTo-CanonicalStorageSourceLocation\b/i.test(deployment)
+    || !/AuthoritativeSourceBuild\[0\]\.source_location_sha256\s+-ne\s+\$SourceDeployBuildSourceLocationSha256/i.test(deployment)
+    || !/BuildStateNameMatch/i.test(deployment)
+    || !/direct_build_inventory_stable/i.test(deployment)
+    || !/cloud_build_assets_before/i.test(deployment)
     || !/ProtectedRevisions/i.test(deployment)
+    || !/status\.imageDigest/i.test(deployment)
+    || !/RepositoryPrefix/i.test(deployment)
+    || !/RotationProtectedRevisions/i.test(deployment)
+    || !/ReplacementVersion/i.test(deployment)
     || !/SecretVersions/i.test(deployment)
+    || rollbackDeclarationCount !== 1
+    || !/Resolve-RetainedRollbackRevisions/i.test(deployment)
+    || !/EvidenceBucketState\.projectNumber/i.test(deployment)
+    || /gcloud\s+storage\s+rm\s+--recursive/i.test(deployment)
+    || !/dedicated_project_label_key/i.test(deployment)
+    || !/google-cloud-resource-identity\.json/i.test(deployment)
+    || !/project_created_at_utc/i.test(deployment)
+    || projectDescribeIndex < 0
+    || projectLabelIndex <= projectDescribeIndex
+    || preservingJsonParserCount !== 2
+    || preservingJsonVersionGateCount !== 2
+    || preservingJsonCapabilityCheckCount !== 2
+    || preservingJsonGetCommandCount !== 2
+    || preservingJsonImplementationCount !== 2
+    || suppressedJsonLineAddCount !== 2
+    || rawJsonPipelineCount !== 0
+    || unqualifiedConvertFromJsonCommandCount !== 2
+    || qualifiedConvertFromJsonCommandCount !== 2
+    || !/FrozenRelease\.google_cloud\.project_id/i.test(deployment)
+    || !/--teardown-identity-only/i.test(deployment)
+    || !/Set-StrictMode\s+-Version\s+Latest/i.test(deployment)
+    || !/\$ErrorActionPreference\s*=\s*'Stop'/i.test(deployment)
+    || !/## After judging: teardown[\s\S]*?```powershell\s*\r?\nSet-StrictMode\s+-Version\s+Latest\s*\r?\n\$ErrorActionPreference\s*=\s*'Stop'/i.test(deployment)
+    || !/Assert-StandaloneDedicatedProjectIdentity/i.test(deployment)
+    || !/Assert-StandaloneLastGcloudSuccess/i.test(deployment)
+    || !/\$ExpectedProjectId\s*=\s*'found-roll-agentic-20260830'/i.test(deployment)
+    || !/gcloud\s+projects\s+delete\s+\$ExpectedProjectId\s+--project=\$ExpectedProjectId\s+--quiet/i.test(deployment)
+    || !/lifecycleState\s+-ne\s+'DELETE_REQUESTED'/i.test(deployment)
+    || !/RecognizedNotFoundPattern/i.test(deployment)
+    || !/\$DescribeOutput\s+-notmatch\s+\$RecognizedNotFoundPattern/i.test(deployment)
+    || !/PostDeleteNotFoundConfirmed/i.test(deployment)
+    || /post_delete_describe_output/i.test(deployment)
+    || /release-record digest to agree/i.test(deployment)
+    || !/Assert-DedicatedProjectIdentity\s*\r?\n\s*gcloud secrets versions destroy/i.test(deployment)
+    || !/service_resource\s*=\s*\$ServiceResource/i.test(deployment)
+    || !/revision_resource\s*=\s*"\$ServiceResource\/revisions\/\$CanonicalRevision"/i.test(deployment)
+    || !/origin\s*=\s*\$CanonicalOrigin/i.test(deployment)
+    || !/The simulator-phase inventory does not carry forward the exact app source-build record/i.test(deployment)
     || !/gcloud\s+projects\s+delete/i.test(deployment)
     || !/scripts\/prepare-canonical-run\.ps1/i.test(deployment.replaceAll("\\", "/"))
     || !/verify-submission-readiness\.mjs/i.test(deployment)
@@ -1245,13 +1736,7 @@ async function loadReceipt(repoRoot, relativePath, expectedDigest, fieldPath, fa
   if (!absolute) return null;
   let raw;
   try {
-    const [realReceipt, realPrivateRoot] = await Promise.all([
-      realpath(absolute),
-      realpath(path.join(repoRoot, "artifacts", "private")),
-    ]);
-    const realRelative = path.relative(realPrivateRoot, realReceipt);
-    if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) throw new Error("receipt escaped private root");
-    raw = await readBoundedFile(absolute);
+    raw = await readRegularFileWithin(path.join(repoRoot, "artifacts", "private"), absolute, maxJsonBytes);
   } catch {
     addFailure(failures, "RECEIPT_UNREADABLE", `${fieldPath} could not be read as a bounded private artifact.`);
     return null;
@@ -1274,6 +1759,1004 @@ async function loadReceipt(repoRoot, relativePath, expectedDigest, fieldPath, fa
   return receipt;
 }
 
+async function loadPrivateEvidenceArtifact(repoRoot, relativePath, expectedDigest, fieldPath, failures) {
+  const absolute = resolvePrivateArtifact(repoRoot, relativePath, `${fieldPath}_path`, failures);
+  if (!absolute) return null;
+  if (!/\.png$/i.test(String(relativePath || ""))) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} must be a redacted PNG capture.`);
+    return null;
+  }
+  let raw;
+  try {
+    raw = await readRegularFileWithin(path.join(repoRoot, "artifacts", "private"), absolute, maxArtifactBytes);
+  } catch {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} could not be read as a bounded private artifact.`);
+    return null;
+  }
+  if (raw.byteLength < 1024) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} is too small to be substantive console evidence.`);
+  }
+  const dimensions = inspectPng(raw);
+  if (!dimensions || dimensions.width < 640 || dimensions.height < 360) {
+    addFailure(
+      failures,
+      "GOOGLE_CLOUD_PREFLIGHT_CAPTURE",
+      `${fieldPath} must be a structurally valid, substantive PNG of at least 640 by 360 pixels.`,
+    );
+    return null;
+  }
+  if (!sha256Pattern.test(String(expectedDigest || "")) || sha256(raw) !== String(expectedDigest).toLowerCase()) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} does not match its supplied SHA-256 digest.`);
+  }
+  return {
+    width: dimensions.width,
+    height: dimensions.height,
+    pixelSha256: dimensions.pixelSha256,
+  };
+}
+
+function freshnessLabel(maximumAgeMilliseconds) {
+  return maximumAgeMilliseconds < 60 * 60 * 1000
+    ? `${maximumAgeMilliseconds / 60_000} minutes`
+    : `${maximumAgeMilliseconds / (60 * 60 * 1000)} hours`;
+}
+
+function validatePreflightTimestamp(
+  receipt,
+  releaseRecord,
+  fieldPath,
+  failures,
+  nowMilliseconds,
+  maximumAgeMilliseconds = preflightFreshnessMilliseconds,
+) {
+  const receiptValid = requireUtcTimestamp(receipt?.observed_at_utc, `${fieldPath}.observed_at_utc`, failures);
+  const releaseValid = requireUtcTimestamp(releaseRecord?.created_at_utc, "release_record.created_at_utc", failures);
+  if (!receiptValid || !releaseValid) return;
+  const receiptTime = Date.parse(receipt.observed_at_utc);
+  const releaseTime = Date.parse(releaseRecord.created_at_utc);
+  const ageMilliseconds = releaseTime - receiptTime;
+  if (ageMilliseconds < 0 || ageMilliseconds > maximumAgeMilliseconds) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.observed_at_utc must be no more than ${freshnessLabel(maximumAgeMilliseconds)} before the release-record timestamp.`);
+  }
+  if (
+    receiptTime > nowMilliseconds + preflightFutureSkewMilliseconds
+    || nowMilliseconds - receiptTime > maximumAgeMilliseconds
+  ) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.observed_at_utc must be within ${freshnessLabel(maximumAgeMilliseconds)} of the current wall clock and not more than five minutes in the future.`);
+  }
+}
+
+function validatePreflightReleaseTimestamp(
+  releaseRecord,
+  failures,
+  nowMilliseconds,
+  maximumAgeMilliseconds = preflightFreshnessMilliseconds,
+) {
+  if (!requireUtcTimestamp(releaseRecord?.created_at_utc, "release_record.created_at_utc", failures)) return;
+  const releaseTime = Date.parse(releaseRecord.created_at_utc);
+  if (
+    releaseTime > nowMilliseconds + preflightFutureSkewMilliseconds
+    || nowMilliseconds - releaseTime > maximumAgeMilliseconds
+  ) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `release_record.created_at_utc must be within ${freshnessLabel(maximumAgeMilliseconds)} of the current wall clock and not more than five minutes in the future.`);
+  }
+}
+
+async function validateBillingPreflightReceipt(
+  repoRoot,
+  receipt,
+  releaseRecord,
+  failures,
+  nowMilliseconds,
+  maximumAgeMilliseconds,
+) {
+  if (!receipt) return;
+  const base = "billing_overview_receipt";
+  if (!checkObject(receipt, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "observed_at_utc",
+    "project_id",
+    "billing_account_name_sha256",
+    "account_type",
+    "billing_enabled",
+    "remaining_credit_visible",
+    "remaining_credit_greater_than_zero",
+    "remaining_time_visible",
+    "remaining_time_greater_than_zero",
+    "paid_activation_absent",
+    "redacted_capture_path",
+    "redacted_capture_sha256",
+    "redacted_console_receipt_reviewed",
+  ], failures)) return;
+  const requiredValues = {
+    schema_version: "1",
+    kind: "found-roll-google-cloud-billing-preflight",
+    status: "PASS",
+    project_id: releaseRecord?.google_cloud?.project_id,
+    account_type: "free_trial",
+    billing_enabled: true,
+    remaining_credit_visible: true,
+    remaining_credit_greater_than_zero: true,
+    remaining_time_visible: true,
+    remaining_time_greater_than_zero: true,
+    paid_activation_absent: true,
+    redacted_console_receipt_reviewed: true,
+  };
+  for (const [key, expected] of Object.entries(requiredValues)) {
+    if (receipt[key] !== expected) {
+      addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT", `${base}.${key} must match the active unupgraded Free Trial preflight.`);
+    }
+  }
+  requireSha256(receipt.billing_account_name_sha256, `${base}.billing_account_name_sha256`, failures);
+  validatePreflightTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds, maximumAgeMilliseconds);
+  requireIdentifier(receipt.redacted_capture_path, `${base}.redacted_capture_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(receipt.redacted_capture_sha256, `${base}.redacted_capture_sha256`, failures);
+  return loadPrivateEvidenceArtifact(
+    repoRoot,
+    receipt.redacted_capture_path,
+    receipt.redacted_capture_sha256,
+    `${base}.redacted_capture`,
+    failures,
+  );
+}
+
+async function validateSpendCapPreflightReceipt(
+  repoRoot,
+  receipt,
+  expectedTarget,
+  releaseRecord,
+  failures,
+  nowMilliseconds,
+  maximumAgeMilliseconds,
+) {
+  if (!receipt) return;
+  const base = `${expectedTarget}_spend_cap_receipt`;
+  if (!checkObject(receipt, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "observed_at_utc",
+    "project_id",
+    "service_target",
+    "cap_status",
+    "project_scope_confirmed",
+    "service_scope_confirmed",
+    "lowest_practical_demo_target_confirmed",
+    "redacted_capture_path",
+    "redacted_capture_sha256",
+    "redacted_console_receipt_reviewed",
+  ], failures)) return;
+  const requiredValues = {
+    schema_version: "1",
+    kind: "found-roll-google-cloud-spend-cap-preflight",
+    status: "PASS",
+    project_id: releaseRecord?.google_cloud?.project_id,
+    service_target: expectedTarget,
+    cap_status: "CONFIGURED",
+    project_scope_confirmed: true,
+    service_scope_confirmed: true,
+    lowest_practical_demo_target_confirmed: true,
+    redacted_console_receipt_reviewed: true,
+  };
+  for (const [key, expected] of Object.entries(requiredValues)) {
+    if (receipt[key] !== expected) {
+      addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT", `${base}.${key} must match the configured project-and-service spend cap.`);
+    }
+  }
+  validatePreflightTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds, maximumAgeMilliseconds);
+  requireIdentifier(receipt.redacted_capture_path, `${base}.redacted_capture_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(receipt.redacted_capture_sha256, `${base}.redacted_capture_sha256`, failures);
+  return loadPrivateEvidenceArtifact(
+    repoRoot,
+    receipt.redacted_capture_path,
+    receipt.redacted_capture_sha256,
+    `${base}.redacted_capture`,
+    failures,
+  );
+}
+
+async function loadAndValidateGoogleCloudPreflightReceipts(
+  repoRoot,
+  releaseRecord,
+  failures,
+  nowMilliseconds,
+  maximumAgeMilliseconds = preflightFreshnessMilliseconds,
+) {
+  const bindings = releaseRecord?.google_cloud?.preflight_receipts;
+  if (!isPlainObject(bindings)) return {};
+  const billing = await loadReceipt(
+    repoRoot,
+    bindings.billing_overview?.path,
+    bindings.billing_overview?.sha256,
+    "billing_overview_receipt",
+    failures,
+  );
+  const cloudRun = await loadReceipt(
+    repoRoot,
+    bindings.cloud_run_spend_cap?.path,
+    bindings.cloud_run_spend_cap?.sha256,
+    "cloud_run_spend_cap_receipt",
+    failures,
+  );
+  const agentPlatform = await loadReceipt(
+    repoRoot,
+    bindings.agent_platform_spend_cap?.path,
+    bindings.agent_platform_spend_cap?.sha256,
+    "agent_platform_spend_cap_receipt",
+    failures,
+  );
+  const [billingCapture, cloudRunCapture, agentPlatformCapture] = await Promise.all([
+    validateBillingPreflightReceipt(repoRoot, billing, releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
+    validateSpendCapPreflightReceipt(repoRoot, cloudRun, "cloud_run", releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
+    validateSpendCapPreflightReceipt(repoRoot, agentPlatform, "agent_platform", releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
+  ]);
+  const captureBindings = [
+    [billing, billingCapture],
+    [cloudRun, cloudRunCapture],
+    [agentPlatform, agentPlatformCapture],
+  ].filter(([receipt, capture]) => isPlainObject(receipt) && isPlainObject(capture))
+    .map(([receipt, capture]) => ({
+      path: String(receipt.redacted_capture_path || "").toLowerCase(),
+      sha256: String(receipt.redacted_capture_sha256 || "").toLowerCase(),
+      pixelSha256: capture.pixelSha256,
+    }));
+  if (
+    captureBindings.length === 3
+    && (
+      new Set(captureBindings.map((binding) => binding.path)).size !== 3
+      || new Set(captureBindings.map((binding) => binding.sha256)).size !== 3
+      || new Set(captureBindings.map((binding) => binding.pixelSha256)).size !== 3
+    )
+  ) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", "Billing Overview, Cloud Run, and Agent Platform must each bind a distinct redacted PNG path, file digest, and decoded pixel image.");
+  }
+  return { billing, cloudRun, agentPlatform };
+}
+
+function validateSanitizedObjectInventory(inventory, fieldPath, failures) {
+  if (!Array.isArray(inventory) || inventory.length > 10_000) {
+    addFailure(failures, "PROJECT_STORAGE_OBJECT_INVENTORY", `${fieldPath} must be a bounded sanitized object array.`);
+    return { count: null, bytes: null };
+  }
+  let bytes = 0;
+  const identities = [];
+  for (let index = 0; index < inventory.length; index += 1) {
+    const entry = inventory[index];
+    const entryPath = `${fieldPath}[${index}]`;
+    if (!checkObject(entry, entryPath, ["object_id_sha256", "generation", "size_bytes"], failures)) continue;
+    requireSha256(entry.object_id_sha256, `${entryPath}.object_id_sha256`, failures);
+    requireIdentifier(entry.generation, `${entryPath}.generation`, failures, /^\d{1,32}$/);
+    requireNonNegativeInteger(entry.size_bytes, `${entryPath}.size_bytes`, failures);
+    identities.push(String(entry.object_id_sha256 || "").toLowerCase());
+    if (Number.isSafeInteger(entry.size_bytes)) bytes += entry.size_bytes;
+  }
+  if (new Set(identities).size !== identities.length || identities.join("\n") !== [...identities].sort().join("\n")) {
+    addFailure(failures, "PROJECT_STORAGE_OBJECT_INVENTORY", `${fieldPath} must contain unique object-generation hashes in deterministic order.`);
+  }
+  return { count: inventory.length, bytes };
+}
+
+function validateProjectStorageReceipt(receipt, expectedPhase, expectedService, releaseRecord, failures) {
+  if (!receipt) return;
+  const base = `${expectedPhase}_project_storage_receipt`;
+  if (!checkObject(receipt, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "phase",
+    "observed_at_utc",
+    "project_id",
+    "project_number",
+    "service",
+    "revision",
+    "revision_created_at_utc",
+    "revision_image_digest",
+    "revision_image_resource",
+    "source_deploy_build_id",
+    "source_deploy_build_location",
+    "source_deploy_build_resource",
+    "source_deploy_build_binding_source",
+    "source_deploy_build_source_location_sha256",
+    "maximum_bytes_exclusive",
+    "observed_bytes",
+    "active_bucket_inventory_sha256",
+    "soft_deleted_bucket_inventory_sha256",
+    "soft_deleted_bucket_count",
+    "cloud_build_inventory_sha256",
+    "cloud_build_locations",
+    "cloud_build_locations_source",
+    "direct_build_identity_inventory_sha256",
+    "direct_build_identity_count",
+    "direct_build_inventory_stable",
+    "cloud_build_asset_snapshot_before_sha256",
+    "cloud_build_asset_snapshot_before_count",
+    "cloud_build_asset_inventory_sha256",
+    "cloud_build_asset_count",
+    "cloud_build_asset_inventory_exhaustive",
+    "cloud_build_asset_snapshot_before_utc",
+    "cloud_build_asset_snapshot_after_utc",
+    "cloud_build_asset_inventory_stable",
+    "completed_build_count",
+    "build_inventory_exhaustive",
+    "artifact_repository_inventory_sha256",
+    "repository_count",
+    "repository_inventory_exhaustive",
+    "artifact_image_inventory_sha256",
+    "image_digest_count",
+    "image_size_bytes",
+    "artifact_inventory_exhaustive",
+    "soft_deleted_bucket_inventory_exhaustive",
+    "soft_deleted_object_inventory_exhaustive",
+    "image_digests_and_sizes_included",
+    "buckets",
+    "soft_deleted_buckets",
+    "builds",
+    "cloud_build_assets_before",
+    "cloud_build_assets",
+    "artifact_repositories",
+    "artifact_images",
+    "revision_images",
+  ], failures)) return;
+  const requiredValues = {
+    schema_version: "1",
+    kind: "found-roll-google-cloud-project-storage-audit",
+    status: "PASS",
+    phase: expectedPhase,
+    project_id: releaseRecord?.google_cloud?.project_id,
+    project_number: releaseRecord?.google_cloud?.project_number,
+    service: expectedService,
+    maximum_bytes_exclusive: 5 * 1024 * 1024 * 1024,
+    soft_deleted_bucket_count: 0,
+    build_inventory_exhaustive: true,
+    cloud_build_locations_source: "cloud-build-v2-paginated-project-locations+global",
+    direct_build_inventory_stable: true,
+    cloud_build_asset_inventory_exhaustive: false,
+    repository_inventory_exhaustive: true,
+    artifact_inventory_exhaustive: true,
+    soft_deleted_bucket_inventory_exhaustive: true,
+    soft_deleted_object_inventory_exhaustive: true,
+    image_digests_and_sizes_included: true,
+  };
+  for (const [key, expected] of Object.entries(requiredValues)) {
+    if (receipt[key] !== expected) {
+      addFailure(failures, "PROJECT_STORAGE_RECEIPT", `${base}.${key} does not match the required post-source-deploy storage audit.`);
+    }
+  }
+  requireIdentifier(receipt.revision, `${base}.revision`, failures);
+  if (!new RegExp(`^${expectedService}-\\d{5}-[a-z0-9]{3}$`).test(String(receipt.revision || ""))) {
+    addFailure(failures, "PROJECT_STORAGE_SERVICE_REVISION", `${base}.revision must be an exact revision of ${expectedService}.`);
+  }
+  if (!imageDigestPattern.test(String(receipt.revision_image_digest || ""))) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_image_digest must be an exact SHA-256 container digest.`);
+  }
+  requireIdentifier(receipt.source_deploy_build_id, `${base}.source_deploy_build_id`, failures);
+  requireIdentifier(receipt.source_deploy_build_location, `${base}.source_deploy_build_location`, failures);
+  requireIdentifier(receipt.source_deploy_build_resource, `${base}.source_deploy_build_resource`, failures);
+  const expectedBuildLocations = Array.isArray(receipt.cloud_build_locations) ? receipt.cloud_build_locations.map(String) : [];
+  if (
+    expectedBuildLocations.length < 2
+    || expectedBuildLocations.length > 200
+    || !expectedBuildLocations.includes("global")
+    || !expectedBuildLocations.includes("us-central1")
+    || new Set(expectedBuildLocations).size !== expectedBuildLocations.length
+    || expectedBuildLocations.join("\n") !== [...expectedBuildLocations].sort().join("\n")
+    || expectedBuildLocations.some((location) => !/^[a-z][a-z0-9-]{0,62}$/.test(location))
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_LOCATION", `${base}.cloud_build_locations must be the unique sorted paginated Cloud Build v2 location set plus global, including us-central1.`);
+  }
+  const expectedSourceBuildResource = `projects/${releaseRecord?.google_cloud?.project_number}/locations/${receipt.source_deploy_build_location}/builds/${receipt.source_deploy_build_id}`;
+  if (
+    !expectedBuildLocations.includes(receipt.source_deploy_build_location)
+    || receipt.source_deploy_build_resource !== expectedSourceBuildResource
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_LOCATION", `${base} must bind the exact project, location, and resource of its source-deploy build.`);
+  }
+  const expectedRevisionImagePrefix = `us-central1-docker.pkg.dev/${releaseRecord?.google_cloud?.project_id}/cloud-run-source-deploy/`;
+  const revisionImagePackage = typeof receipt.revision_image_resource === "string"
+    ? receipt.revision_image_resource.slice(0, -String(`@${receipt.revision_image_digest}`).length)
+    : "";
+  const revisionImagePackageSuffix = revisionImagePackage.slice(expectedRevisionImagePrefix.length);
+  if (
+    typeof receipt.revision_image_resource !== "string"
+    || !revisionImagePackage.startsWith(expectedRevisionImagePrefix)
+    || !/^[^/:@\s]+$/.test(revisionImagePackageSuffix)
+    || receipt.revision_image_resource !== `${revisionImagePackage}@${receipt.revision_image_digest}`
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_image_resource must be the exact dedicated-project Artifact Registry package@digest.`);
+  }
+  if (receipt.source_deploy_build_binding_source !== "cloud-run-build-annotations") {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_BINDING", `${base}.source_deploy_build_binding_source must be the authoritative Cloud Run build annotations.`);
+  }
+  requireSha256(receipt.source_deploy_build_source_location_sha256, `${base}.source_deploy_build_source_location_sha256`, failures);
+  const observedValid = requireUtcTimestamp(receipt.observed_at_utc, `${base}.observed_at_utc`, failures);
+  const revisionValid = requireUtcTimestamp(receipt.revision_created_at_utc, `${base}.revision_created_at_utc`, failures);
+  const projectValid = requireUtcTimestamp(
+    releaseRecord?.google_cloud?.project_created_at_utc,
+    "release_record.google_cloud.project_created_at_utc",
+    failures,
+  );
+  const releaseValid = requireUtcTimestamp(releaseRecord?.created_at_utc, "release_record.created_at_utc", failures);
+  if (observedValid && revisionValid) {
+    const auditDelay = Date.parse(receipt.observed_at_utc) - Date.parse(receipt.revision_created_at_utc);
+    if (auditDelay < 0 || auditDelay > operationalPreflightFreshnessMilliseconds) {
+      addFailure(failures, "PROJECT_STORAGE_AUDIT_TIMING", `${base} must be observed no more than ten minutes after its exact source-deploy revision was created.`);
+    }
+  }
+  if (observedValid && revisionValid && projectValid && releaseValid) {
+    const projectTime = Date.parse(releaseRecord.google_cloud.project_created_at_utc);
+    const revisionTime = Date.parse(receipt.revision_created_at_utc);
+    const observedTime = Date.parse(receipt.observed_at_utc);
+    const releaseTime = Date.parse(releaseRecord.created_at_utc);
+    if (revisionTime < projectTime || observedTime < projectTime) {
+      addFailure(failures, "PROJECT_STORAGE_TIMELINE", `${base} cannot predate creation of the dedicated project.`);
+    }
+    if (observedTime > releaseTime || releaseTime - observedTime > preflightFreshnessMilliseconds) {
+      addFailure(failures, "PROJECT_STORAGE_FRESHNESS", `${base} must precede the release record by no more than 24 hours.`);
+    }
+  }
+  for (const key of [
+    "active_bucket_inventory_sha256",
+    "soft_deleted_bucket_inventory_sha256",
+    "cloud_build_inventory_sha256",
+    "direct_build_identity_inventory_sha256",
+    "cloud_build_asset_snapshot_before_sha256",
+    "cloud_build_asset_inventory_sha256",
+    "artifact_repository_inventory_sha256",
+    "artifact_image_inventory_sha256",
+  ]) requireSha256(receipt[key], `${base}.${key}`, failures);
+  for (const key of [
+    "maximum_bytes_exclusive",
+    "observed_bytes",
+    "soft_deleted_bucket_count",
+    "completed_build_count",
+    "direct_build_identity_count",
+    "cloud_build_asset_snapshot_before_count",
+    "cloud_build_asset_count",
+    "repository_count",
+    "image_digest_count",
+    "image_size_bytes",
+  ]) requireNonNegativeInteger(receipt[key], `${base}.${key}`, failures);
+  if (Number.isSafeInteger(receipt.observed_bytes) && receipt.observed_bytes >= 5 * 1024 * 1024 * 1024) {
+    addFailure(failures, "PROJECT_STORAGE_CEILING", `${base}.observed_bytes must remain below five GiB.`);
+  }
+  const minimumInventoryCount = expectedPhase === "after_app_source_deploy" ? 1 : 2;
+  if (receipt.completed_build_count < minimumInventoryCount) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base}.completed_build_count must cover every completed source deploy through this phase.`);
+  }
+  if (receipt.image_digest_count < minimumInventoryCount || receipt.image_size_bytes <= 0) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${base} must include digest and positive-size evidence for every source-deployed image through this phase.`);
+  }
+  if (!Array.isArray(receipt.buckets) || receipt.buckets.length < 1 || receipt.buckets.length > 20) {
+    addFailure(failures, "PROJECT_STORAGE_BUCKET_INVENTORY", `${base}.buckets must enumerate every active project bucket.`);
+    return;
+  }
+  let enumeratedBytes = receipt.image_size_bytes;
+  const bucketNames = new Set();
+  receipt.buckets.forEach((bucket, index) => {
+    const bucketBase = `${base}.buckets[${index}]`;
+    if (!checkObject(bucket, bucketBase, [
+      "bucket",
+      "project_number",
+      "ordinary_bytes",
+      "soft_deleted_bytes",
+      "current_object_count",
+      "all_version_object_count",
+      "soft_deleted_object_count",
+      "versioning_enabled",
+      "retention_policy_seconds",
+      "soft_delete_seconds",
+      "current_object_inventory_sha256",
+      "all_version_object_inventory_sha256",
+      "soft_deleted_object_inventory_sha256",
+      "current_objects",
+      "all_version_objects",
+      "soft_deleted_objects",
+    ], failures)) return;
+    requireIdentifier(bucket.bucket, `${bucketBase}.bucket`, failures, bucketNamePattern);
+    if (bucketNames.has(bucket.bucket)) addFailure(failures, "PROJECT_STORAGE_BUCKET_INVENTORY", `${base}.buckets must not repeat a bucket.`);
+    bucketNames.add(bucket.bucket);
+    if (bucket.project_number !== releaseRecord?.google_cloud?.project_number) {
+      addFailure(failures, "PROJECT_STORAGE_BUCKET_OWNERSHIP", `${bucketBase}.project_number must match the dedicated project.`);
+    }
+    for (const key of [
+      "ordinary_bytes",
+      "soft_deleted_bytes",
+      "current_object_count",
+      "all_version_object_count",
+      "soft_deleted_object_count",
+      "retention_policy_seconds",
+      "soft_delete_seconds",
+    ]) requireNonNegativeInteger(bucket[key], `${bucketBase}.${key}`, failures);
+    requireSha256(bucket.current_object_inventory_sha256, `${bucketBase}.current_object_inventory_sha256`, failures);
+    requireSha256(bucket.all_version_object_inventory_sha256, `${bucketBase}.all_version_object_inventory_sha256`, failures);
+    requireSha256(bucket.soft_deleted_object_inventory_sha256, `${bucketBase}.soft_deleted_object_inventory_sha256`, failures);
+    const currentInventory = validateSanitizedObjectInventory(bucket.current_objects, `${bucketBase}.current_objects`, failures);
+    const allVersionInventory = validateSanitizedObjectInventory(bucket.all_version_objects, `${bucketBase}.all_version_objects`, failures);
+    const softDeletedInventory = validateSanitizedObjectInventory(bucket.soft_deleted_objects, `${bucketBase}.soft_deleted_objects`, failures);
+    if (
+      currentInventory.count !== bucket.current_object_count
+      || allVersionInventory.count !== bucket.all_version_object_count
+      || softDeletedInventory.count !== bucket.soft_deleted_object_count
+      || allVersionInventory.bytes !== bucket.ordinary_bytes
+      || softDeletedInventory.bytes !== bucket.soft_deleted_bytes
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_OBJECT_INVENTORY", `${bucketBase} counts and bytes must be recomputable from its sanitized object arrays.`);
+    }
+    if (
+      Array.isArray(bucket.current_objects)
+      && Array.isArray(bucket.all_version_objects)
+      && Array.isArray(bucket.soft_deleted_objects)
+      && (
+        sha256(canonicalJsonBuffer(bucket.current_objects)) !== String(bucket.current_object_inventory_sha256 || "").toLowerCase()
+        || sha256(canonicalJsonBuffer(bucket.all_version_objects)) !== String(bucket.all_version_object_inventory_sha256 || "").toLowerCase()
+        || sha256(canonicalJsonBuffer(bucket.soft_deleted_objects)) !== String(bucket.soft_deleted_object_inventory_sha256 || "").toLowerCase()
+      )
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_OBJECT_INVENTORY_HASH", `${bucketBase} object-inventory hashes must be recomputable from the sanitized child arrays.`);
+    }
+    if (
+      Array.isArray(bucket.current_objects)
+      && Array.isArray(bucket.all_version_objects)
+      && !canonicalJsonBuffer(bucket.current_objects).equals(canonicalJsonBuffer(bucket.all_version_objects))
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_RETENTION", `${bucketBase} current and all-version inventories must be identical while versioning is disabled.`);
+    }
+    if (
+      bucket.versioning_enabled !== false
+      || bucket.retention_policy_seconds !== 0
+      || bucket.soft_delete_seconds !== 0
+      || bucket.soft_deleted_bytes !== 0
+      || bucket.soft_deleted_object_count !== 0
+      || bucket.current_object_count !== bucket.all_version_object_count
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_RETENTION", `${bucketBase} must prove zero versioning, retention, soft-delete policy, noncurrent versions, and soft-deleted objects.`);
+    }
+    if (Number.isSafeInteger(bucket.ordinary_bytes) && Number.isSafeInteger(bucket.soft_deleted_bytes)) {
+      enumeratedBytes += bucket.ordinary_bytes + bucket.soft_deleted_bytes;
+    }
+  });
+  if (bucketNames.size > 0 && !bucketNames.has(releaseRecord?.google_cloud?.evidence_bucket)) {
+    addFailure(failures, "PROJECT_STORAGE_EVIDENCE_BUCKET", `${base}.buckets must include the exact frozen evidence bucket.`);
+  }
+  if (Array.isArray(receipt.buckets)) {
+    const sortedBucketNames = receipt.buckets.map((bucket) => bucket?.bucket);
+    if (sortedBucketNames.join("\n") !== [...sortedBucketNames].sort().join("\n")) {
+      addFailure(failures, "PROJECT_STORAGE_BUCKET_INVENTORY", `${base}.buckets must use deterministic bucket-name order.`);
+    }
+    if (sha256(canonicalJsonBuffer(receipt.buckets)) !== String(receipt.active_bucket_inventory_sha256 || "").toLowerCase()) {
+      addFailure(failures, "PROJECT_STORAGE_INVENTORY_HASH", `${base}.active_bucket_inventory_sha256 must be recomputable from buckets.`);
+    }
+  }
+  if (!Array.isArray(receipt.soft_deleted_buckets) || receipt.soft_deleted_buckets.length !== 0) {
+    addFailure(failures, "PROJECT_STORAGE_RETENTION", `${base}.soft_deleted_buckets must be the exhaustively observed empty inventory.`);
+  } else if (sha256(canonicalJsonBuffer(receipt.soft_deleted_buckets)) !== String(receipt.soft_deleted_bucket_inventory_sha256 || "").toLowerCase()) {
+    addFailure(failures, "PROJECT_STORAGE_INVENTORY_HASH", `${base}.soft_deleted_bucket_inventory_sha256 must be recomputable from soft_deleted_buckets.`);
+  }
+
+  const buildResources = new Set();
+  let completedBuildCount = 0;
+  let sourceBuild = null;
+  if (!Array.isArray(receipt.builds) || receipt.builds.length < minimumInventoryCount || receipt.builds.length > 100) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base}.builds must preserve the complete sanitized Cloud Build inventory.`);
+  } else {
+    for (let index = 0; index < receipt.builds.length; index += 1) {
+      const build = receipt.builds[index];
+      const buildBase = `${base}.builds[${index}]`;
+      if (!checkObject(build, buildBase, ["build_id", "location", "build_resource", "status", "created_at_utc", "finished_at_utc", "source_location_sha256", "image_digests", "image_resources"], failures)) continue;
+      requireIdentifier(build.build_id, `${buildBase}.build_id`, failures);
+      requireIdentifier(build.location, `${buildBase}.location`, failures);
+      requireIdentifier(build.build_resource, `${buildBase}.build_resource`, failures);
+      requireIdentifier(build.status, `${buildBase}.status`, failures);
+      requireSha256(build.source_location_sha256, `${buildBase}.source_location_sha256`, failures);
+      const createdValid = requireUtcTimestamp(build.created_at_utc, `${buildBase}.created_at_utc`, failures);
+      const finishedValid = requireUtcTimestamp(build.finished_at_utc, `${buildBase}.finished_at_utc`, failures);
+      const expectedBuildResource = `projects/${releaseRecord?.google_cloud?.project_number}/locations/${build.location}/builds/${build.build_id}`;
+      if (!expectedBuildLocations.includes(build.location) || build.build_resource !== expectedBuildResource) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_LOCATION", `${buildBase} must identify an exact global or us-central1 build resource in the dedicated project.`);
+      }
+      if (buildResources.has(build.build_resource)) addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base}.builds must not repeat a build resource.`);
+      buildResources.add(build.build_resource);
+      if (build.status === "SUCCESS") completedBuildCount += 1;
+      if (
+        build.build_id === receipt.source_deploy_build_id
+        && build.location === receipt.source_deploy_build_location
+        && build.build_resource === receipt.source_deploy_build_resource
+      ) sourceBuild = build;
+      if (!Array.isArray(build.image_digests)) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_digests must be an array.`);
+      } else {
+        const normalizedDigests = build.image_digests.map(String);
+        if (new Set(normalizedDigests).size !== normalizedDigests.length || normalizedDigests.join("\n") !== [...normalizedDigests].sort().join("\n")) {
+          addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_digests must be unique and sorted.`);
+        }
+        for (const digest of normalizedDigests) {
+          if (!imageDigestPattern.test(digest)) addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_digests contains an invalid digest.`);
+        }
+      }
+      if (!Array.isArray(build.image_resources)) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_resources must be an array.`);
+      } else {
+        const normalizedResources = build.image_resources.map(String);
+        if (new Set(normalizedResources).size !== normalizedResources.length || normalizedResources.join("\n") !== [...normalizedResources].sort().join("\n")) {
+          addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_resources must be unique and sorted.`);
+        }
+        for (const imageResource of normalizedResources) {
+          const resourceMatch = imageResource.match(new RegExp(`^us-central1-docker\\.pkg\\.dev/${releaseRecord?.google_cloud?.project_id}/cloud-run-source-deploy/[^/:@\\s]+@(sha256:[a-f0-9]{64})$`));
+          if (!resourceMatch || !Array.isArray(build.image_digests) || !build.image_digests.includes(resourceMatch[1])) {
+            addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.image_resources must exactly bind its dedicated-project package and declared digest.`);
+          }
+        }
+      }
+      if (createdValid && finishedValid && Date.parse(build.finished_at_utc) < Date.parse(build.created_at_utc)) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase}.finished_at_utc must not precede creation.`);
+      }
+      if (finishedValid && observedValid && Date.parse(build.finished_at_utc) > Date.parse(receipt.observed_at_utc)) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${buildBase} cannot finish after the storage audit.`);
+      }
+      if (createdValid && projectValid && Date.parse(build.created_at_utc) < Date.parse(releaseRecord.google_cloud.project_created_at_utc)) {
+        addFailure(failures, "PROJECT_STORAGE_TIMELINE", `${buildBase} cannot predate the dedicated project.`);
+      }
+    }
+    const orderedBuildResources = receipt.builds.map((build) => build?.build_resource);
+    if (orderedBuildResources.join("\n") !== [...orderedBuildResources].sort().join("\n")) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base}.builds must use deterministic build-resource order.`);
+    }
+    if (completedBuildCount !== receipt.completed_build_count) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base}.completed_build_count must be recomputable from builds.`);
+    }
+    if (sha256(canonicalJsonBuffer(receipt.builds)) !== String(receipt.cloud_build_inventory_sha256 || "").toLowerCase()) {
+      addFailure(failures, "PROJECT_STORAGE_INVENTORY_HASH", `${base}.cloud_build_inventory_sha256 must be recomputable from builds.`);
+    }
+    const directBuildIdentities = receipt.builds.map((build) => ({
+      build_id: build?.build_id,
+      location: build?.location,
+      build_resource: build?.build_resource,
+    }));
+    if (
+      receipt.direct_build_identity_count !== directBuildIdentities.length
+      || sha256(canonicalJsonBuffer(directBuildIdentities)) !== String(receipt.direct_build_identity_inventory_sha256 || "").toLowerCase()
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_INVENTORY", `${base} direct build identity count and hash must be recomputable from the authoritative all-location build inventory.`);
+    }
+  }
+  const validateBuildAssetSnapshot = (assets, fieldName, expectedCount, expectedHash) => {
+    const fieldPath = `${base}.${fieldName}`;
+    if (!Array.isArray(assets) || assets.length > 100) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${fieldPath} must preserve the sanitized supplemental Cloud Asset Build snapshot.`);
+      return null;
+    }
+    const resources = [];
+    for (let index = 0; index < assets.length; index += 1) {
+      const asset = assets[index];
+      const assetBase = `${fieldPath}[${index}]`;
+      if (!checkObject(asset, assetBase, ["build_id", "location", "build_resource"], failures)) continue;
+      const expectedResource = `projects/${releaseRecord?.google_cloud?.project_number}/locations/${asset.location}/builds/${asset.build_id}`;
+      if (!expectedBuildLocations.includes(asset.location) || asset.build_resource !== expectedResource || !buildResources.has(asset.build_resource)) {
+        addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${assetBase} must be an exact observed subset identity of the direct all-location Build inventory.`);
+      }
+      resources.push(asset.build_resource);
+    }
+    if (new Set(resources).size !== resources.length || resources.join("\n") !== [...resources].sort().join("\n")) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${fieldPath} must contain unique build resources in deterministic order.`);
+    }
+    const snapshotBuffer = canonicalJsonBuffer(assets);
+    if (expectedCount !== assets.length || sha256(snapshotBuffer) !== String(expectedHash || "").toLowerCase()) {
+      addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${fieldPath} count and hash must be recomputable from its sanitized array.`);
+    }
+    return snapshotBuffer;
+  };
+  const beforeAssetsBuffer = validateBuildAssetSnapshot(
+    receipt.cloud_build_assets_before,
+    "cloud_build_assets_before",
+    receipt.cloud_build_asset_snapshot_before_count,
+    receipt.cloud_build_asset_snapshot_before_sha256,
+  );
+  const afterAssetsBuffer = validateBuildAssetSnapshot(
+    receipt.cloud_build_assets,
+    "cloud_build_assets",
+    receipt.cloud_build_asset_count,
+    receipt.cloud_build_asset_inventory_sha256,
+  );
+  const assetBeforeValid = requireUtcTimestamp(receipt.cloud_build_asset_snapshot_before_utc, `${base}.cloud_build_asset_snapshot_before_utc`, failures);
+  const assetAfterValid = requireUtcTimestamp(receipt.cloud_build_asset_snapshot_after_utc, `${base}.cloud_build_asset_snapshot_after_utc`, failures);
+  if (
+    typeof receipt.cloud_build_asset_inventory_stable !== "boolean"
+    || (beforeAssetsBuffer && afterAssetsBuffer && receipt.cloud_build_asset_inventory_stable !== beforeAssetsBuffer.equals(afterAssetsBuffer))
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${base}.cloud_build_asset_inventory_stable must be recomputable from the two supplemental snapshots.`);
+  }
+  if (
+    assetBeforeValid
+    && assetAfterValid
+    && (
+      Date.parse(receipt.cloud_build_asset_snapshot_before_utc) > Date.parse(receipt.cloud_build_asset_snapshot_after_utc)
+      || (observedValid && Date.parse(receipt.cloud_build_asset_snapshot_after_utc) > Date.parse(receipt.observed_at_utc))
+    )
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_ASSET_INVENTORY", `${base} Cloud Asset snapshots must be chronologically ordered before the receipt observation.`);
+  }
+  if (
+    !sourceBuild
+    || sourceBuild.status !== "SUCCESS"
+    || sourceBuild.source_location_sha256 !== receipt.source_deploy_build_source_location_sha256
+    || !Array.isArray(sourceBuild.image_digests)
+    || !sourceBuild.image_digests.includes(receipt.revision_image_digest)
+    || !Array.isArray(sourceBuild.image_resources)
+    || !sourceBuild.image_resources.includes(receipt.revision_image_resource)
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_BINDING", `${base}.source_deploy_build_id, location, and resource must identify a successful build that produced revision_image_digest.`);
+  } else if (
+    revisionValid
+    && Number.isFinite(Date.parse(sourceBuild.finished_at_utc))
+    && Date.parse(sourceBuild.finished_at_utc) > Date.parse(receipt.revision_created_at_utc)
+  ) {
+    addFailure(failures, "PROJECT_STORAGE_BUILD_BINDING", `${base}.source_deploy_build_id must finish no later than the revision it produced was created.`);
+  }
+
+  const repositoriesByUri = new Map();
+  if (!Array.isArray(receipt.artifact_repositories) || receipt.artifact_repositories.length < 1 || receipt.artifact_repositories.length > 20) {
+    addFailure(failures, "PROJECT_STORAGE_REPOSITORY_INVENTORY", `${base}.artifact_repositories must preserve every project Artifact Registry repository.`);
+  } else {
+    for (let index = 0; index < receipt.artifact_repositories.length; index += 1) {
+      const repository = receipt.artifact_repositories[index];
+      const repositoryBase = `${base}.artifact_repositories[${index}]`;
+      if (!checkObject(repository, repositoryBase, ["repository", "location", "format", "repository_uri", "artifact_count", "artifact_size_bytes"], failures)) continue;
+      for (const key of ["repository", "location", "format", "repository_uri"]) requireIdentifier(repository[key], `${repositoryBase}.${key}`, failures);
+      requireNonNegativeInteger(repository.artifact_count, `${repositoryBase}.artifact_count`, failures);
+      requireNonNegativeInteger(repository.artifact_size_bytes, `${repositoryBase}.artifact_size_bytes`, failures);
+      const expectedRepositoryUri = `${repository.location}-docker.pkg.dev/${releaseRecord?.google_cloud?.project_id}/${repository.repository}`;
+      if (repository.repository_uri !== expectedRepositoryUri) {
+        addFailure(failures, "PROJECT_STORAGE_REPOSITORY_IDENTITY", `${repositoryBase}.repository_uri must be derived from its location, dedicated project ID, and repository ID.`);
+      }
+      if (repository.format !== "DOCKER") {
+        addFailure(failures, "PROJECT_STORAGE_NON_DOCKER_REPOSITORY", `${repositoryBase}.format is not DOCKER; remove or separately account that repository before release.`);
+      }
+      if (repositoriesByUri.has(repository.repository_uri)) addFailure(failures, "PROJECT_STORAGE_REPOSITORY_INVENTORY", `${base}.artifact_repositories must not repeat a repository URI.`);
+      repositoriesByUri.set(repository.repository_uri, repository);
+    }
+    const orderedRepositoryUris = receipt.artifact_repositories.map((repository) => repository?.repository_uri);
+    if (orderedRepositoryUris.join("\n") !== [...orderedRepositoryUris].sort().join("\n")) {
+      addFailure(failures, "PROJECT_STORAGE_REPOSITORY_INVENTORY", `${base}.artifact_repositories must use deterministic URI order.`);
+    }
+    if (receipt.repository_count !== receipt.artifact_repositories.length) {
+      addFailure(failures, "PROJECT_STORAGE_REPOSITORY_INVENTORY", `${base}.repository_count must be recomputable from artifact_repositories.`);
+    }
+    if (sha256(canonicalJsonBuffer(receipt.artifact_repositories)) !== String(receipt.artifact_repository_inventory_sha256 || "").toLowerCase()) {
+      addFailure(failures, "PROJECT_STORAGE_INVENTORY_HASH", `${base}.artifact_repository_inventory_sha256 must be recomputable from artifact_repositories.`);
+    }
+  }
+
+  let imageSizeBytes = 0;
+  const imageKeys = new Set();
+  const imageDigests = new Set();
+  const repositoryTotals = new Map();
+  if (!Array.isArray(receipt.artifact_images) || receipt.artifact_images.length < minimumInventoryCount || receipt.artifact_images.length > 100) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${base}.artifact_images must preserve every digest and positive size.`);
+  } else {
+    for (let index = 0; index < receipt.artifact_images.length; index += 1) {
+      const image = receipt.artifact_images[index];
+      const imageBase = `${base}.artifact_images[${index}]`;
+      if (!checkObject(image, imageBase, ["repository_uri", "package", "digest", "size_bytes"], failures)) continue;
+      requireIdentifier(image.repository_uri, `${imageBase}.repository_uri`, failures);
+      requireIdentifier(image.package, `${imageBase}.package`, failures);
+      if (!imageDigestPattern.test(String(image.digest || ""))) addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${imageBase}.digest must be exact.`);
+      requireNonNegativeInteger(image.size_bytes, `${imageBase}.size_bytes`, failures);
+      if (image.size_bytes <= 0) addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${imageBase}.size_bytes must be positive.`);
+      if (!repositoriesByUri.has(image.repository_uri) || !String(image.package || "").startsWith(`${image.repository_uri}/`)) {
+        addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${imageBase} must belong to a preserved Docker repository.`);
+      }
+      const imageKey = `${image.package}@${image.digest}`;
+      if (imageKeys.has(imageKey)) addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${base}.artifact_images must not repeat a package digest.`);
+      imageKeys.add(imageKey);
+      imageDigests.add(image.digest);
+      if (Number.isSafeInteger(image.size_bytes)) {
+        imageSizeBytes += image.size_bytes;
+        const previous = repositoryTotals.get(image.repository_uri) || { count: 0, bytes: 0 };
+        repositoryTotals.set(image.repository_uri, { count: previous.count + 1, bytes: previous.bytes + image.size_bytes });
+      }
+    }
+    const orderedImageKeys = receipt.artifact_images.map((image) => `${image?.package}@${image?.digest}`);
+    if (orderedImageKeys.join("\n") !== [...orderedImageKeys].sort().join("\n")) {
+      addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${base}.artifact_images must use deterministic package-digest order.`);
+    }
+    if (receipt.image_digest_count !== receipt.artifact_images.length || receipt.image_size_bytes !== imageSizeBytes) {
+      addFailure(failures, "PROJECT_STORAGE_IMAGE_INVENTORY", `${base} image counts and bytes must be recomputable from artifact_images.`);
+    }
+    if (sha256(canonicalJsonBuffer(receipt.artifact_images)) !== String(receipt.artifact_image_inventory_sha256 || "").toLowerCase()) {
+      addFailure(failures, "PROJECT_STORAGE_INVENTORY_HASH", `${base}.artifact_image_inventory_sha256 must be recomputable from artifact_images.`);
+    }
+  }
+  for (const [repositoryUri, repository] of repositoriesByUri.entries()) {
+    const totals = repositoryTotals.get(repositoryUri) || { count: 0, bytes: 0 };
+    if (repository.artifact_count !== totals.count || repository.artifact_size_bytes !== totals.bytes) {
+      addFailure(failures, "PROJECT_STORAGE_REPOSITORY_INVENTORY", `${base} repository counts and bytes must be recomputable from artifact_images.`);
+    }
+  }
+
+  const revisionNames = new Set();
+  let ownRevisionBound = false;
+  if (!Array.isArray(receipt.revision_images) || receipt.revision_images.length < minimumInventoryCount || receipt.revision_images.length > 20) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_images must bind every source-deployed service revision through this phase.`);
+  } else {
+    for (let index = 0; index < receipt.revision_images.length; index += 1) {
+      const revisionImage = receipt.revision_images[index];
+      const revisionBase = `${base}.revision_images[${index}]`;
+      if (!checkObject(revisionImage, revisionBase, ["service", "revision", "image_digest", "image_package", "image_resource"], failures)) continue;
+      requireIdentifier(revisionImage.service, `${revisionBase}.service`, failures);
+      requireIdentifier(revisionImage.revision, `${revisionBase}.revision`, failures);
+      if (!imageDigestPattern.test(String(revisionImage.image_digest || ""))) addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${revisionBase}.image_digest must be exact.`);
+      if (!String(revisionImage.revision || "").startsWith(`${revisionImage.service}-`)) addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${revisionBase}.revision must belong to its service.`);
+      if (revisionImage.image_resource !== `${revisionImage.image_package}@${revisionImage.image_digest}` || !imageKeys.has(revisionImage.image_resource)) {
+        addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${revisionBase} must bind an exact Artifact Registry package@digest in artifact_images.`);
+      }
+      if (revisionNames.has(revisionImage.revision)) addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_images must not repeat a revision.`);
+      revisionNames.add(revisionImage.revision);
+      if (
+        revisionImage.service === expectedService
+        && revisionImage.revision === receipt.revision
+        && revisionImage.image_digest === receipt.revision_image_digest
+        && revisionImage.image_resource === receipt.revision_image_resource
+      ) ownRevisionBound = true;
+    }
+  }
+  if (!ownRevisionBound) addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_images must contain the receipt service, revision, and digest tuple.`);
+  if (!imageKeys.has(receipt.revision_image_resource)) {
+    addFailure(failures, "PROJECT_STORAGE_IMAGE_BINDING", `${base}.revision_image_resource must exist as the exact package@digest in artifact_images.`);
+  }
+  if (Number.isSafeInteger(receipt.observed_bytes) && enumeratedBytes !== receipt.observed_bytes) {
+    addFailure(failures, "PROJECT_STORAGE_TOTAL", `${base}.observed_bytes must equal all bucket bytes plus all image bytes.`);
+  }
+}
+
+async function loadAndValidateProjectStorageReceipts(repoRoot, releaseRecord, failures) {
+  const bindings = releaseRecord?.google_cloud?.project_storage_receipts;
+  if (!isPlainObject(bindings)) return {};
+  const app = await loadReceipt(
+    repoRoot,
+    bindings.after_app_source_deploy?.path,
+    bindings.after_app_source_deploy?.sha256,
+    "after_app_source_deploy_project_storage_receipt",
+    failures,
+  );
+  const simulator = await loadReceipt(
+    repoRoot,
+    bindings.after_simulator_source_deploy?.path,
+    bindings.after_simulator_source_deploy?.sha256,
+    "after_simulator_source_deploy_project_storage_receipt",
+    failures,
+  );
+  validateProjectStorageReceipt(app, "after_app_source_deploy", "found-roll-app", releaseRecord, failures);
+  validateProjectStorageReceipt(
+    simulator,
+    "after_simulator_source_deploy",
+    "found-roll-simulator",
+    releaseRecord,
+    failures,
+  );
+  if (app && simulator) {
+    if (app.revision === simulator.revision || app.source_deploy_build_resource === simulator.source_deploy_build_resource) {
+      addFailure(failures, "PROJECT_STORAGE_PHASE_BINDING", "App and simulator source-deploy receipts must bind distinct revisions and exact build resources.");
+    }
+    const appObserved = Date.parse(app.observed_at_utc);
+    const simulatorRevisionCreated = Date.parse(simulator.revision_created_at_utc);
+    if (Number.isFinite(appObserved) && Number.isFinite(simulatorRevisionCreated) && simulatorRevisionCreated < appObserved) {
+      addFailure(failures, "PROJECT_STORAGE_PHASE_BINDING", "The simulator source-deploy revision cannot predate the completed app-phase storage audit.");
+    }
+    const simulatorAppBinding = Array.isArray(simulator.revision_images)
+      ? simulator.revision_images.find((binding) => binding?.service === "found-roll-app")
+      : null;
+    if (
+      !simulatorAppBinding
+      || simulatorAppBinding.revision !== app.revision
+      || simulatorAppBinding.image_digest !== app.revision_image_digest
+      || simulatorAppBinding.image_resource !== app.revision_image_resource
+    ) {
+      addFailure(failures, "PROJECT_STORAGE_PHASE_BINDING", "The simulator-phase receipt must preserve the exact app source revision and image digest from the app phase.");
+    }
+    const appSourceBuild = Array.isArray(app.builds)
+      ? app.builds.find((build) => build?.build_resource === app.source_deploy_build_resource)
+      : null;
+    let appSourceBuildPreserved = false;
+    if (isPlainObject(appSourceBuild) && Array.isArray(simulator.builds)) {
+      try {
+        const expectedAppSourceBuild = canonicalJsonBuffer(appSourceBuild);
+        appSourceBuildPreserved = simulator.builds.some(
+          (build) => isPlainObject(build) && canonicalJsonBuffer(build).equals(expectedAppSourceBuild),
+        );
+      } catch {
+        appSourceBuildPreserved = false;
+      }
+    }
+    if (!appSourceBuildPreserved) {
+      addFailure(failures, "PROJECT_STORAGE_PHASE_BINDING", "The simulator-phase build inventory must preserve the exact app source-build record from the app phase.");
+    }
+  }
+  return { app, simulator };
+}
+
+function validateCanonicalRevisionImageBindings(
+  releaseRecord,
+  storageReceipts,
+  preparationReceipts,
+  runReceipts,
+  failures,
+) {
+  const canonical = releaseRecord?.google_cloud?.canonical_revision_images;
+  const appCanonical = canonical?.app;
+  const simulatorCanonical = canonical?.simulator;
+  const appStorage = storageReceipts?.app;
+  const simulatorStorage = storageReceipts?.simulator;
+  const referenceRun = (runReceipts || []).find(Boolean);
+  if (![appCanonical, simulatorCanonical, appStorage, simulatorStorage, referenceRun].every(isPlainObject)) return;
+
+  for (const [binding, receiptKey, expectedService] of [
+    [appCanonical, "app_revision", "found-roll-app"],
+    [simulatorCanonical, "simulator_revision", "found-roll-simulator"],
+  ]) {
+    if (binding.service !== expectedService || binding.revision !== referenceRun[receiptKey]) {
+      addFailure(failures, "CANONICAL_REVISION_IMAGE", `release_record.google_cloud.canonical_revision_images.${expectedService === "found-roll-app" ? "app" : "simulator"} must bind the exact revision used by all canonical runs.`);
+    }
+  }
+  if (appCanonical.revision === simulatorCanonical.revision || appCanonical.image_resource === simulatorCanonical.image_resource) {
+    addFailure(failures, "CANONICAL_REVISION_IMAGE", "Canonical app and simulator revisions and exact image resources must be distinct.");
+  }
+  if (appCanonical.image_resource !== appStorage.revision_image_resource) {
+    addFailure(failures, "CANONICAL_REVISION_IMAGE", "The canonical app revision must use the exact package@digest produced by the app source deploy.");
+  }
+  if (
+    simulatorCanonical.revision !== simulatorStorage.revision
+    || simulatorCanonical.revision_created_at_utc !== simulatorStorage.revision_created_at_utc
+    || simulatorCanonical.image_digest !== simulatorStorage.revision_image_digest
+    || simulatorCanonical.image_resource !== simulatorStorage.revision_image_resource
+  ) {
+    addFailure(failures, "CANONICAL_REVISION_IMAGE", "The canonical simulator revision must be the exact simulator source-deploy revision and image digest.");
+  }
+  const finalInventoryImages = new Set(
+    Array.isArray(simulatorStorage.artifact_images)
+      ? simulatorStorage.artifact_images.map((image) => `${image?.package}@${image?.digest}`)
+      : [],
+  );
+  for (const binding of [appCanonical, simulatorCanonical]) {
+    if (!finalInventoryImages.has(binding.image_resource)) {
+      addFailure(failures, "CANONICAL_REVISION_IMAGE", "Every canonical service image resource must exist in the simulator-phase project artifact inventory.");
+    }
+  }
+
+  const projectCreated = Date.parse(releaseRecord?.google_cloud?.project_created_at_utc);
+  const releaseCreated = Date.parse(releaseRecord?.created_at_utc);
+  const appCanonicalCreated = Date.parse(appCanonical.revision_created_at_utc);
+  const simulatorCanonicalCreated = Date.parse(simulatorCanonical.revision_created_at_utc);
+  const appSourceCreated = Date.parse(appStorage.revision_created_at_utc);
+  const simulatorAuditObserved = Date.parse(simulatorStorage.observed_at_utc);
+  const preparationTimes = (preparationReceipts || []).map((receipt) => Date.parse(receipt?.prepared_at)).filter(Number.isFinite);
+  const firstPreparation = preparationTimes.length ? Math.min(...preparationTimes) : null;
+  if (
+    ![
+      projectCreated,
+      releaseCreated,
+      appCanonicalCreated,
+      simulatorCanonicalCreated,
+      appSourceCreated,
+      simulatorAuditObserved,
+    ].every(Number.isFinite)
+    || firstPreparation === null
+  ) return;
+  if (
+    appSourceCreated < projectCreated
+    || simulatorCanonicalCreated < projectCreated
+    || appCanonicalCreated < simulatorAuditObserved
+    || appCanonicalCreated < appSourceCreated
+    || firstPreparation <= appCanonicalCreated
+    || firstPreparation <= simulatorCanonicalCreated
+    || firstPreparation <= simulatorAuditObserved
+    || releaseCreated < firstPreparation
+  ) {
+    addFailure(failures, "CANONICAL_CLOUD_TIMELINE", "Project creation, source deploys, final canonical revisions, preparations, and release freeze must occur in that order.");
+  }
+}
+
 async function validateFrozenContractSources(repoRoot, frozenContracts, failures) {
   const expectedPaths = {
     prompt: "service/app/agent_contract.py",
@@ -1287,10 +2770,13 @@ async function validateFrozenContractSources(repoRoot, frozenContracts, failures
       addFailure(failures, "CONTRACT_SOURCE_PATH", `release_record.frozen_contracts.${key}.source_path must identify the canonical source file.`);
       continue;
     }
-    let raw;
-    try {
-      raw = await readBoundedFile(path.join(repoRoot, expectedPath));
-    } catch {
+    const raw = await loadRepositoryFile(
+      repoRoot,
+      expectedPath,
+      `release_record.frozen_contracts.${key}.source_path`,
+      failures,
+    );
+    if (!raw) {
       addFailure(failures, "CONTRACT_SOURCE_UNREADABLE", `release_record.frozen_contracts.${key}.source_path could not be read.`);
       continue;
     }
@@ -1518,6 +3004,10 @@ function validateRunReceipt(receipt, binding, releaseRecord, preparationReceipt,
     [receipt.prompt_version, releaseRecord?.frozen_contracts?.prompt?.version, "prompt_version"],
     [receipt.output_schema_version, releaseRecord?.frozen_contracts?.output_schema?.version, "output_schema_version"],
     [receipt.policy_version, releaseRecord?.frozen_contracts?.policy?.version, "policy_version"],
+    [receipt.app_origin, releaseRecord?.google_cloud?.canonical_revision_images?.app?.origin, "app_origin"],
+    [receipt.simulator_origin, releaseRecord?.google_cloud?.canonical_revision_images?.simulator?.origin, "simulator_origin"],
+    [receipt.app_revision, releaseRecord?.google_cloud?.canonical_revision_images?.app?.revision, "app_revision"],
+    [receipt.simulator_revision, releaseRecord?.google_cloud?.canonical_revision_images?.simulator?.revision, "simulator_revision"],
   ];
   for (const [actual, expected, key] of matches) {
     if (expected === undefined || expected === null || actual !== expected) {
@@ -1614,6 +3104,9 @@ function validateRunReceipt(receipt, binding, releaseRecord, preparationReceipt,
     }
     for (const key of ["firestore_transaction_contention_verified", "evidence_generations_verified", "task_oidc_verified", "production_payload_omitted", "simulator_https_verified", "simulator_api_auth_verified", "callback_signature_verified"]) {
       requireTrue(receipt.cloud_boundary[key], `${base}.cloud_boundary.${key}`, failures);
+    }
+    if (receipt.cloud_boundary.evidence_bucket !== releaseRecord?.google_cloud?.evidence_bucket) {
+      addFailure(failures, "RECEIPT_BINDING", `${base}.cloud_boundary.evidence_bucket must match the exact dedicated-project evidence bucket.`);
     }
     if (!Number.isInteger(receipt.cloud_boundary.task_delivery_attempts) || receipt.cloud_boundary.task_delivery_attempts < 2) {
       addFailure(failures, "CLOUD_DUPLICATE_PROOF", `${base}.cloud_boundary.task_delivery_attempts must include a deliberate duplicate delivery.`);
@@ -1998,7 +3491,7 @@ function validateCanonicalPrivacyReceipt(receipt, runBindings, releaseRecord, fa
   }
 }
 
-function validateCleanBrowserReceipt(receipt, runReceipts, releaseRecord, failures) {
+function validateCleanBrowserReceipt(receipt, runReceipts, releaseRecord, failures, nowMilliseconds = Date.now()) {
   if (!receipt) return;
   const base = "clean_browser_receipt";
   if (!checkObject(receipt, base, [
@@ -2021,7 +3514,7 @@ function validateCleanBrowserReceipt(receipt, runReceipts, releaseRecord, failur
     judge_access_verified: true,
     current_rendered_design_verified: true,
   })) requireReceiptValue(receipt, key, expected, base, failures);
-  requireUtcTimestamp(receipt.verified_at_utc, `${base}.verified_at_utc`, failures);
+  const verifiedValid = requireUtcTimestamp(receipt.verified_at_utc, `${base}.verified_at_utc`, failures);
   requireIdentifier(receipt.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
   requireReceiptIdentifier(receipt, "app_revision", base, failures);
   requireReceiptIdentifier(receipt, "simulator_revision", base, failures);
@@ -2039,6 +3532,28 @@ function validateCleanBrowserReceipt(receipt, runReceipts, releaseRecord, failur
   ];
   for (const [actual, expected, key] of matches) {
     if (!expected || actual !== expected) addFailure(failures, "RECEIPT_BINDING", `${base}.${key} must match the frozen release and canonical revision.`);
+  }
+  const releaseValid = requireUtcTimestamp(releaseRecord?.created_at_utc, "release_record.created_at_utc", failures);
+  const endedTimes = (runReceipts || []).map((runReceipt) => Date.parse(runReceipt?.ended_at_utc));
+  if (!verifiedValid || !releaseValid) return;
+  if (endedTimes.length !== 5 || endedTimes.some((endedTime) => !Number.isFinite(endedTime))) {
+    addFailure(failures, "CLEAN_BROWSER_FRESHNESS", `${base}.verified_at_utc requires all five canonical run completion times.`);
+    return;
+  }
+  const verifiedTime = Date.parse(receipt.verified_at_utc);
+  const releaseTime = Date.parse(releaseRecord.created_at_utc);
+  const currentTime = Number.isFinite(nowMilliseconds) ? nowMilliseconds : Date.now();
+  if (verifiedTime <= Math.max(...endedTimes)) {
+    addFailure(failures, "CLEAN_BROWSER_FRESHNESS", `${base}.verified_at_utc must follow completion of all five canonical runs.`);
+  }
+  if (verifiedTime >= releaseTime || releaseTime - verifiedTime > preflightFreshnessMilliseconds) {
+    addFailure(failures, "CLEAN_BROWSER_FRESHNESS", `${base}.verified_at_utc must precede the release record by no more than 24 hours.`);
+  }
+  if (
+    verifiedTime > currentTime + preflightFutureSkewMilliseconds
+    || currentTime - verifiedTime > preflightFreshnessMilliseconds
+  ) {
+    addFailure(failures, "CLEAN_BROWSER_FRESHNESS", `${base}.verified_at_utc must be within 24 hours of the current wall clock and not more than five minutes in the future.`);
   }
 }
 
@@ -2121,7 +3636,7 @@ async function listSubmissionMarkdown(repoRoot) {
   const files = [];
   const readme = path.join(repoRoot, "README.md");
   try {
-    await readFile(readme);
+    await readRegularFileWithin(repoRoot, readme, maxArtifactBytes);
     files.push(readme);
   } catch {
     // The missing README is reported by the placeholder scan caller.
@@ -2156,7 +3671,7 @@ async function scanSubmissionMarkdown(repoRoot, failures) {
   for (const file of files) {
     let content;
     try {
-      content = (await readBoundedFile(file)).toString("utf8");
+      content = (await readRegularFileWithin(repoRoot, file, maxArtifactBytes)).toString("utf8");
     } catch {
       addFailure(failures, "SUBMISSION_MARKDOWN", `${normalizeRelativePath(path.relative(repoRoot, file))} could not be scanned.`);
       continue;
@@ -2220,6 +3735,16 @@ function validateGitState(releaseRecord, gitState, failures) {
   if (gitState.clean !== true) addFailure(failures, "WORKTREE_DIRTY", "The Git worktree must be clean, including untracked files, at submission freeze.");
 }
 
+function validatePrivateArtifactGitState(gitState, failures) {
+  if (!gitState?.available) {
+    addFailure(failures, "GIT_UNAVAILABLE", "The preflight verifier could not inspect the local Git repository.");
+    return;
+  }
+  if (gitState.privateArtifactsSafe !== true) {
+    addFailure(failures, "PRIVATE_ARTIFACT_GIT_STATE", "The private preflight release record, receipts, and captures must be ignored and absent from Git tracking.");
+  }
+}
+
 function runGit(repoRoot, args) {
   const result = spawnSync("git", args, {
     cwd: repoRoot,
@@ -2246,7 +3771,7 @@ function runGitStatus(repoRoot, args) {
   return result.status;
 }
 
-function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord) {
+function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loadedPreflightReceipts = {}) {
   const values = [];
   if (recordPath) values.push(normalizeRelativePath(path.relative(repoRoot, path.resolve(recordPath))));
   const receipts = releaseRecord?.receipts;
@@ -2257,6 +3782,26 @@ function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord) {
         values.push(binding?.preparation_path, binding?.run_path, binding?.chain_audit_path);
       }
     }
+  }
+  const preflightReceipts = releaseRecord?.google_cloud?.preflight_receipts;
+  if (isPlainObject(preflightReceipts)) {
+    for (const key of ["billing_overview", "cloud_run_spend_cap", "agent_platform_spend_cap"]) {
+      values.push(preflightReceipts[key]?.path);
+    }
+  }
+  const projectStorageReceipts = releaseRecord?.google_cloud?.project_storage_receipts;
+  if (isPlainObject(projectStorageReceipts)) {
+    values.push(
+      projectStorageReceipts.after_app_source_deploy?.path,
+      projectStorageReceipts.after_simulator_source_deploy?.path,
+    );
+  }
+  for (const receipt of [
+    loadedPreflightReceipts.billing,
+    loadedPreflightReceipts.cloudRun,
+    loadedPreflightReceipts.agentPlatform,
+  ]) {
+    if (isPlainObject(receipt)) values.push(receipt.redacted_capture_path);
   }
   return values.filter((value) => typeof value === "string");
 }
@@ -2311,8 +3856,10 @@ export async function verifySubmissionReadiness(releaseRecord, {
   repoRoot = defaultRepoRoot,
   gitState,
   recordPath,
+  nowMilliseconds = Date.now(),
 } = {}) {
   const failures = [];
+  const preflightNowMilliseconds = Number.isFinite(nowMilliseconds) ? nowMilliseconds : Date.now();
   scanSensitiveContent(releaseRecord, "release_record", failures);
   validateReleaseRecord(releaseRecord, failures);
 
@@ -2322,6 +3869,16 @@ export async function verifySubmissionReadiness(releaseRecord, {
       addFailure(failures, "PRIVATE_RELEASE_RECORD", "The filled release record must be stored under ignored artifacts/private/.");
     }
   }
+
+  validatePreflightReleaseTimestamp(releaseRecord, failures, preflightNowMilliseconds);
+  await validateGoogleCloudResourceIdentity(repoRoot, releaseRecord, failures);
+  const loadedPreflightReceipts = await loadAndValidateGoogleCloudPreflightReceipts(
+    repoRoot,
+    releaseRecord,
+    failures,
+    preflightNowMilliseconds,
+  );
+  const projectStorageReceipts = await loadAndValidateProjectStorageReceipts(repoRoot, releaseRecord, failures);
 
   await validateFrozenContractSources(repoRoot, releaseRecord?.frozen_contracts, failures);
   const frozenFileBindings = new Map(
@@ -2403,16 +3960,96 @@ export async function verifySubmissionReadiness(releaseRecord, {
     );
   }
   validateCanonicalRunSet(runBindings, preparationReceipts, runReceipts, releaseRecord, failures);
+  validateCanonicalRevisionImageBindings(
+    releaseRecord,
+    projectStorageReceipts,
+    preparationReceipts,
+    runReceipts,
+    failures,
+  );
   validateCanonicalPrivacyReceipt(canonicalPrivacyReceipt, runBindings, releaseRecord, failures);
-  validateCleanBrowserReceipt(cleanBrowserReceipt, runReceipts, releaseRecord, failures);
+  validateCleanBrowserReceipt(cleanBrowserReceipt, runReceipts, releaseRecord, failures, preflightNowMilliseconds);
   await scanSubmissionMarkdown(repoRoot, failures);
-  const privateArtifactPaths = collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord);
+  const privateArtifactPaths = collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loadedPreflightReceipts);
   validateGitState(
     releaseRecord,
     gitState || collectGitState(repoRoot, releaseRecord?.repository?.release_tag, privateArtifactPaths),
     failures,
   );
 
+  return { ok: failures.length === 0, failures };
+}
+
+export async function verifyGoogleCloudPreflight(releaseRecord, {
+  repoRoot = defaultRepoRoot,
+  gitState,
+  recordPath,
+  nowMilliseconds = Date.now(),
+} = {}) {
+  const failures = [];
+  const preflightNowMilliseconds = Number.isFinite(nowMilliseconds) ? nowMilliseconds : Date.now();
+  scanSensitiveContent(releaseRecord, "release_record", failures);
+  if (!isPlainObject(releaseRecord)) {
+    addFailure(failures, "RECORD_SCHEMA", "release_record must be an object.");
+    return { ok: false, failures };
+  }
+  if (releaseRecord.schema_version !== RELEASE_RECORD_SCHEMA_VERSION) {
+    addFailure(failures, "SCHEMA_VERSION", "release_record.schema_version must match the supported schema version.");
+  }
+  if (releaseRecord.kind !== "found-roll-submission-release") {
+    addFailure(failures, "RELEASE_KIND", "release_record.kind must be found-roll-submission-release.");
+  }
+  validatePreflightReleaseTimestamp(
+    releaseRecord,
+    failures,
+    preflightNowMilliseconds,
+    operationalPreflightFreshnessMilliseconds,
+  );
+  validateGoogleCloudRecord(releaseRecord.google_cloud, failures, { requireDeploymentReady: false });
+  if (recordPath) {
+    const relative = normalizeRelativePath(path.relative(repoRoot, path.resolve(recordPath)));
+    if (relative.startsWith("../") || path.isAbsolute(relative) || !relative.startsWith("artifacts/private/")) {
+      addFailure(failures, "PRIVATE_RELEASE_RECORD", "The preflight release record must be stored under ignored artifacts/private/.");
+    }
+  }
+  await validateGoogleCloudResourceIdentity(repoRoot, releaseRecord, failures);
+  const loadedPreflightReceipts = await loadAndValidateGoogleCloudPreflightReceipts(
+    repoRoot,
+    releaseRecord,
+    failures,
+    preflightNowMilliseconds,
+    operationalPreflightFreshnessMilliseconds,
+  );
+  const privateArtifactPaths = collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loadedPreflightReceipts);
+  validatePrivateArtifactGitState(
+    gitState || collectGitState(repoRoot, releaseRecord?.repository?.release_tag, privateArtifactPaths),
+    failures,
+  );
+  return { ok: failures.length === 0, failures };
+}
+
+export async function verifyGoogleCloudTeardownIdentity(releaseRecord, {
+  repoRoot = defaultRepoRoot,
+  gitState,
+  recordPath,
+} = {}) {
+  const failures = [];
+  scanSensitiveContent(releaseRecord, "release_record", failures);
+  validateReleaseRecord(releaseRecord, failures);
+  if (recordPath) {
+    const relative = normalizeRelativePath(path.relative(repoRoot, path.resolve(recordPath)));
+    if (relative.startsWith("../") || path.isAbsolute(relative) || !relative.startsWith("artifacts/private/")) {
+      addFailure(failures, "PRIVATE_RELEASE_RECORD", "The frozen release record must remain under ignored artifacts/private/ for teardown verification.");
+    }
+  }
+  await validateGoogleCloudResourceIdentity(repoRoot, releaseRecord, failures);
+  await validateFrozenFiles(repoRoot, releaseRecord?.frozen_files, failures);
+  const privateArtifactPaths = collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord);
+  validateGitState(
+    releaseRecord,
+    gitState || collectGitState(repoRoot, releaseRecord?.repository?.release_tag, privateArtifactPaths),
+    failures,
+  );
   return { ok: failures.length === 0, failures };
 }
 
@@ -2423,27 +4060,48 @@ export function formatReadinessResult(result) {
   return `${lines.join("\n")}\n`;
 }
 
+export function formatGoogleCloudPreflightResult(result) {
+  if (result.ok) return "GOOGLE CLOUD PREFLIGHT: PASS\nThe active Free Trial and both project-and-service spend caps are hash-bound and fresh.\n";
+  const lines = [`GOOGLE CLOUD PREFLIGHT: FAIL (${result.failures.length})`];
+  for (const failure of result.failures) lines.push(`- [${failure.code}] ${failure.message}`);
+  return `${lines.join("\n")}\n`;
+}
+
+export function formatGoogleCloudTeardownIdentityResult(result) {
+  if (result.ok) return "GOOGLE CLOUD TEARDOWN IDENTITY: PASS\nThe frozen release tag and dedicated-project identity are cross-bound for teardown.\n";
+  const lines = [`GOOGLE CLOUD TEARDOWN IDENTITY: FAIL (${result.failures.length})`];
+  for (const failure of result.failures) lines.push(`- [${failure.code}] ${failure.message}`);
+  return `${lines.join("\n")}\n`;
+}
+
 function parseCliArgs(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return { help: true };
-  const parsed = { repoRoot: defaultRepoRoot, recordPath: null };
+  const parsed = {
+    repoRoot: defaultRepoRoot,
+    recordPath: null,
+    preflightOnly: false,
+    teardownIdentityOnly: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--record" && argv[index + 1]) parsed.recordPath = path.resolve(argv[++index]);
     else if (argument === "--repo-root" && argv[index + 1]) parsed.repoRoot = path.resolve(argv[++index]);
+    else if (argument === "--preflight-only" && !parsed.preflightOnly) parsed.preflightOnly = true;
+    else if (argument === "--teardown-identity-only" && !parsed.teardownIdentityOnly) parsed.teardownIdentityOnly = true;
     else return { error: true };
   }
-  if (!parsed.recordPath) return { error: true };
+  if (!parsed.recordPath || (parsed.preflightOnly && parsed.teardownIdentityOnly)) return { error: true };
   return parsed;
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const args = parseCliArgs(argv);
   if (args.help) {
-    stdout.write("Usage: node scripts/verify-submission-readiness.mjs --record artifacts/private/submission-release.json [--repo-root <path>]\n");
+    stdout.write("Usage: node scripts/verify-submission-readiness.mjs --record artifacts/private/submission-release.json [--repo-root <path>] [--preflight-only | --teardown-identity-only]\n");
     return 0;
   }
   if (args.error) {
-    stderr.write("SUBMISSION READINESS: FAIL (1)\n- [CLI_USAGE] Supply exactly --record and, optionally, --repo-root.\n");
+    stderr.write("SUBMISSION READINESS: FAIL (1)\n- [CLI_USAGE] Supply exactly --record and, optionally, --repo-root and one verification mode.\n");
     return 1;
   }
   try {
@@ -2460,29 +4118,49 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   let raw;
   let record;
   try {
-    raw = await readBoundedFile(args.recordPath);
+    raw = await readRegularFileWithin(path.join(args.repoRoot, "artifacts", "private"), args.recordPath, maxJsonBytes);
     record = JSON.parse(raw.toString("utf8"));
   } catch {
     stderr.write("SUBMISSION READINESS: FAIL (1)\n- [RELEASE_RECORD_UNREADABLE] The release record could not be read as bounded JSON.\n");
     return 1;
   }
-  const gitState = collectGitState(
-    args.repoRoot,
-    record?.repository?.release_tag,
-    collectPrivateArtifactBindings(args.repoRoot, args.recordPath, record),
-  );
-  const result = await verifySubmissionReadiness(record, {
-    repoRoot: args.repoRoot,
-    gitState,
-    recordPath: args.recordPath,
-  });
-  const output = formatReadinessResult(result);
+  const result = args.preflightOnly
+    ? await verifyGoogleCloudPreflight(record, {
+      repoRoot: args.repoRoot,
+      recordPath: args.recordPath,
+    })
+    : args.teardownIdentityOnly
+      ? await verifyGoogleCloudTeardownIdentity(record, {
+        repoRoot: args.repoRoot,
+        recordPath: args.recordPath,
+      })
+    : await verifySubmissionReadiness(record, {
+      repoRoot: args.repoRoot,
+      recordPath: args.recordPath,
+    });
+  const output = args.preflightOnly
+    ? formatGoogleCloudPreflightResult(result)
+    : args.teardownIdentityOnly
+      ? formatGoogleCloudTeardownIdentityResult(result)
+      : formatReadinessResult(result);
   (result.ok ? stdout : stderr).write(output);
   return result.ok ? 0 : 1;
 }
 
-const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
-if (invokedPath === scriptPath) {
+async function isDirectInvocation(invokedValue) {
+  if (!invokedValue) return false;
+  try {
+    const [realInvokedPath, realScriptPath] = await Promise.all([
+      realpath(path.resolve(invokedValue)),
+      realpath(scriptPath),
+    ]);
+    return path.relative(realInvokedPath, realScriptPath) === "";
+  } catch {
+    return false;
+  }
+}
+
+if (await isDirectInvocation(process.argv[1])) {
   runCli().then((exitCode) => {
     process.exitCode = exitCode;
   }).catch(() => {

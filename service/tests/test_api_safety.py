@@ -1,9 +1,187 @@
-import re
-
 from conftest import STAFF_HEADERS, begin_and_process_analysis, issue_claim_link, reach_approved
 
 
-PRIVATE_ANSWER_PATTERN = re.compile(r"(?<!\d)4118(?!\d)")
+PRIVATE_ANSWER = "4118"
+OPAQUE_PRIVATE_FIELD_SUFFIXES = (
+    "_at",
+    "_at_utc",
+    "_digest",
+    "_digests",
+    "_etag",
+    "_generation",
+    "_generations",
+    "_hash",
+    "_hashes",
+    "_id",
+    "_ids",
+    "_sha",
+    "_sha256",
+    "_utc",
+)
+OPAQUE_PRIVATE_FIELD_NAMES = {
+    "checksum",
+    "digest",
+    "etag",
+    "generation",
+    "hash",
+    "id",
+    "sha256",
+    "evidence_digests",
+    "idempotency_key",
+    "last_replay_task_name",
+    "project_number",
+    "release_task_name",
+    "submitted_commit",
+    "task_name",
+    "workflow_epoch",
+}
+REFERENCE_PRIVATE_FIELD_SUFFIXES = (
+    "_bucket",
+    "_file",
+    "_namespace",
+    "_origin",
+    "_package",
+    "_path",
+    "_ref",
+    "_refs",
+    "_resource",
+    "_resources",
+    "_revision",
+    "_uri",
+    "_url",
+)
+REFERENCE_PRIVATE_FIELD_NAMES = {
+    "bucket",
+    "entrypoint",
+    "evidence_refs",
+    "firestore_namespace",
+    "origin",
+    "package",
+    "path",
+    "render",
+    "renderer",
+    "repository",
+    "resource",
+    "revision",
+    "source",
+    "source_file",
+    "uri",
+    "url",
+}
+
+
+def private_field_mode(field_name):
+    if field_name in REFERENCE_PRIVATE_FIELD_NAMES or field_name.endswith(REFERENCE_PRIVATE_FIELD_SUFFIXES):
+        return "reference"
+    if field_name in OPAQUE_PRIVATE_FIELD_NAMES or field_name.endswith(OPAQUE_PRIVATE_FIELD_SUFFIXES):
+        return "opaque"
+    return "semantic"
+
+
+def scalar_contains_private_value(value, token, mode):
+    if mode == "opaque":
+        return value == token
+    if mode == "semantic":
+        return token in value
+    start = 0
+    while True:
+        index = value.find(token, start)
+        if index < 0:
+            return False
+        end = index + len(token)
+        if (index == 0 or not value[index - 1].isalnum()) and (
+            end == len(value) or not value[end].isalnum()
+        ):
+            return True
+        start = index + 1
+
+
+def surface_contains_private_value(value, token, *, mode="semantic"):
+    if isinstance(value, dict):
+        return any(
+            scalar_contains_private_value(str(key), token, "semantic")
+            or surface_contains_private_value(
+                child, token, mode=private_field_mode(str(key))
+            )
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(
+            surface_contains_private_value(child, token, mode=mode)
+            for child in value
+        )
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return str(value) == token
+    if not isinstance(value, str):
+        return False
+    return scalar_contains_private_value(value, token, mode)
+
+
+def test_private_surface_check_distinguishes_opaque_collision_from_semantic_echo():
+    assert private_field_mode("cloud_build_asset_snapshot_before_utc") == "opaque"
+    assert private_field_mode("cloud_build_asset_snapshot_after_utc") == "opaque"
+    assert private_field_mode("image_resources") == "reference"
+    assert private_field_mode("package") == "reference"
+    assert private_field_mode("image_package") == "reference"
+    assert surface_contains_private_value(
+        {
+            "event_hash": f"abc{PRIVATE_ANSWER}def",
+            "evidence_digests": [f"abc{PRIVATE_ANSWER}def"],
+            "idempotency_key": f"idem-abc{PRIVATE_ANSWER}def",
+            "last_replay_task_name": f"replay-abc{PRIVATE_ANSWER}def",
+            "occurred_at": f"2026-08-30T03:{PRIVATE_ANSWER}:00Z",
+            "original_generation": f"gen-abc{PRIVATE_ANSWER}def",
+            "preview_generation": f"gen-abc{PRIVATE_ANSWER}def",
+            "release_task_name": f"release-abc{PRIVATE_ANSWER}def",
+            "sha256": f"abc{PRIVATE_ANSWER}def",
+            "task_name": f"task-abc{PRIVATE_ANSWER}def",
+            "workflow_epoch": f"epoch-abc{PRIVATE_ANSWER}def",
+            "evidence_refs": [f"ref://item/abc{PRIVATE_ANSWER}def"],
+            "bytes": int(f"14{PRIVATE_ANSWER}"),
+            "app_origin": f"https://abc{PRIVATE_ANSWER}def.example",
+            "app_revision": f"found-roll-app-abc{PRIVATE_ANSWER}def",
+            "commit_sha": f"abc{PRIVATE_ANSWER}def",
+            "project_created_at_utc": f"2026-08-30T03:{PRIVATE_ANSWER}:00Z",
+            "cloud_build_asset_snapshot_before_utc": f"2026-08-30T03:{PRIVATE_ANSWER}:00Z",
+            "cloud_build_asset_snapshot_after_utc": f"2026-08-30T04:{PRIVATE_ANSWER}:00Z",
+            "project_number": f"106{PRIVATE_ANSWER}7746",
+            "revision": f"revision-abc{PRIVATE_ANSWER}def",
+            "revision_resource": f"projects/abc{PRIVATE_ANSWER}def/revisions/current",
+            "service_resource": f"projects/abc{PRIVATE_ANSWER}def/services/found-roll",
+            "image_resources": [
+                f"us-central1-docker.pkg.dev/project/repository/abc{PRIVATE_ANSWER}def@sha256:abcdef"
+            ],
+            "package": f"us-central1-docker.pkg.dev/project/repository/abc{PRIVATE_ANSWER}def",
+            "image_package": f"us-central1-docker.pkg.dev/project/repository/abc{PRIVATE_ANSWER}def",
+            "submitted_commit": f"abc{PRIVATE_ANSWER}def",
+            "tree_sha": f"abc{PRIVATE_ANSWER}def",
+        },
+        PRIVATE_ANSWER,
+    ) is False
+    assert surface_contains_private_value(
+        {"reason": f"private-answer-{PRIVATE_ANSWER}-was-rejected"},
+        PRIVATE_ANSWER,
+    ) is True
+    assert surface_contains_private_value(
+        {f"private-{PRIVATE_ANSWER}-field": "redacted"},
+        PRIVATE_ANSWER,
+    ) is True
+    assert surface_contains_private_value(
+        {"evidence_refs": [f"ref://item/{PRIVATE_ANSWER}"]},
+        PRIVATE_ANSWER,
+    ) is True
+    assert surface_contains_private_value({"bytes": int(PRIVATE_ANSWER)}, PRIVATE_ANSWER) is True
+    assert surface_contains_private_value({"project_number": PRIVATE_ANSWER}, PRIVATE_ANSWER) is True
+    for private_surface in (
+        {"cloud_build_asset_snapshot_before_utc": PRIVATE_ANSWER},
+        {"cloud_build_asset_snapshot_after_utc": PRIVATE_ANSWER},
+        {"image_resources": [f"pkg/{PRIVATE_ANSWER}@sha256:abcdef"]},
+        {"package": f"pkg/{PRIVATE_ANSWER}"},
+        {"image_package": f"pkg/{PRIVATE_ANSWER}"},
+    ):
+        assert surface_contains_private_value(private_surface, PRIVATE_ANSWER) is True
 
 
 def test_dangerous_pre_intake_creates_no_record_or_model_call(client):
@@ -164,7 +342,7 @@ def test_candidate_and_case_surfaces_never_reveal_private_answer(client, case_id
         response = client.get(endpoint)
         assert response.status_code == 200
         text = response.text.lower()
-        assert PRIVATE_ANSWER_PATTERN.search(text) is None
+        assert surface_contains_private_value(response.json(), PRIVATE_ANSWER) is False
         assert "restricted_value_hash" not in text
         assert "claimant_token_hash" not in text
         assert "custodian_token_hash" not in text
@@ -215,13 +393,14 @@ def test_repeated_wrong_answers_enter_manual_review_without_answer_leak(client, 
         expected_version=version,
         idempotency_key="wrong-answer-link-001",
     )
-    for attempt in range(1, 5):
+    wrong_answers = [f"nope-{attempt}" for attempt in range(1, 5)]
+    for attempt, wrong_answer in enumerate(wrong_answers, start=1):
         response = client.post(
             f"/api/v1/passports/{case_id}/claim-evidence",
             json={
                 "expected_version": version,
                 "idempotency_key": f"wrong-answer-{attempt:03d}",
-                "answer": f"nope-{attempt}",
+                "answer": wrong_answer,
             },
             headers={"X-Found-Roll-Claim-Link": claim_link["token"]},
         )
@@ -230,9 +409,13 @@ def test_repeated_wrong_answers_enter_manual_review_without_answer_leak(client, 
         if response.json()["case"]["state"] == "CLARIFICATION_REQUIRED":
             claim_link = response.json()["replacement_claim_link"]
     assert response.json()["case"]["state"] == "MANUAL_REVIEW"
-    assert PRIVATE_ANSWER_PATTERN.search(
-        client.get(f"/api/v1/passports/{case_id}/events").text
-    ) is None
+    event_response = client.get(f"/api/v1/passports/{case_id}/events")
+    event_body = event_response.json()
+    assert surface_contains_private_value(event_body, PRIVATE_ANSWER) is False
+    assert all(
+        surface_contains_private_value(event_body, wrong_answer) is False
+        for wrong_answer in wrong_answers
+    )
 
 
 def test_stale_case_version_is_rejected(client, case_id):

@@ -1,0 +1,18 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-google-cloud-billing-preflight",
+  "status": "BLOCKED",
+  "observed_at_utc": "<billing-overview-observed-at-utc>",
+  "project_id": "found-roll-agentic-20260830",
+  "billing_account_name_sha256": "<sha256-of-exact-live-billing-account-resource-name>",
+  "account_type": "unverified",
+  "billing_enabled": false,
+  "remaining_credit_visible": false,
+  "remaining_credit_greater_than_zero": false,
+  "remaining_time_visible": false,
+  "remaining_time_greater_than_zero": false,
+  "paid_activation_absent": false,
+  "redacted_capture_path": "artifacts/private/billing-overview-redacted.png",
+  "redacted_capture_sha256": "<billing-overview-redacted-capture-sha256>",
+  "redacted_console_receipt_reviewed": false
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,9 @@ import { deflateSync } from "node:zlib";
 
 import {
   formatReadinessResult,
+  requiredFrozenFilePaths,
+  verifyGoogleCloudPreflight,
+  verifyGoogleCloudTeardownIdentity,
   verifySubmissionReadiness,
 } from "../scripts/verify-submission-readiness.mjs";
 
@@ -30,6 +33,28 @@ function stableJsonValue(value) {
 
 function canonicalJson(value) {
   return Buffer.from(JSON.stringify(stableJsonValue(value)), "utf8");
+}
+
+function refreshStorageBuildProof(receipt, { refreshAssets = false } = {}) {
+  receipt.builds.sort((left, right) => left.build_resource.localeCompare(right.build_resource));
+  receipt.cloud_build_inventory_sha256 = sha256(canonicalJson(receipt.builds));
+  receipt.completed_build_count = receipt.builds.filter((build) => build.status === "SUCCESS").length;
+  const identities = receipt.builds.map((build) => ({
+    build_id: build.build_id,
+    location: build.location,
+    build_resource: build.build_resource,
+  }));
+  receipt.direct_build_identity_count = identities.length;
+  receipt.direct_build_identity_inventory_sha256 = sha256(canonicalJson(identities));
+  if (refreshAssets) {
+    receipt.cloud_build_assets_before = structuredClone(identities);
+    receipt.cloud_build_assets = structuredClone(identities);
+    receipt.cloud_build_asset_snapshot_before_count = identities.length;
+    receipt.cloud_build_asset_count = identities.length;
+    receipt.cloud_build_asset_snapshot_before_sha256 = sha256(canonicalJson(identities));
+    receipt.cloud_build_asset_inventory_sha256 = sha256(canonicalJson(identities));
+    receipt.cloud_build_asset_inventory_stable = true;
+  }
 }
 
 function crc32(buffer) {
@@ -70,6 +95,15 @@ function fixturePng(width = 960, height = 540) {
     pngChunk("IHDR", ihdr),
     pngChunk("IDAT", deflateSync(scanlines)),
     pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function withPngText(raw, text) {
+  const iendLength = 12;
+  return Buffer.concat([
+    raw.subarray(0, raw.byteLength - iendLength),
+    pngChunk("tEXt", Buffer.from(`audit\0${text}`, "latin1")),
+    raw.subarray(raw.byteLength - iendLength),
   ]);
 }
 
@@ -268,7 +302,7 @@ function validRunReceipt({ commit, tree, versions, runId, ordinal, workflowEpoch
     submitted_commit: commit,
     tree_sha: tree,
     preparation_receipt_sha256: preparationDigest,
-    project_id: "found-roll-demo-123",
+    project_id: "found-roll-agentic-20260830",
     hosted_url: "https://found-roll.web.app",
     case_id: "FR-20260829-0042",
     workflow_epoch: workflowEpoch,
@@ -314,7 +348,7 @@ function validRunReceipt({ commit, tree, versions, runId, ordinal, workflowEpoch
     cloud_boundary: {
       firestore_namespace: "found-roll-submission",
       firestore_transaction_contention_verified: true,
-      evidence_bucket: "found-roll-demo-evidence",
+      evidence_bucket: "found-roll-agentic-20260830-found-roll-evidence",
       evidence_generations_verified: true,
       task_name: `release-task-00${ordinal}`,
       task_oidc_verified: true,
@@ -364,6 +398,11 @@ function validRunReceipt({ commit, tree, versions, runId, ordinal, workflowEpoch
 
 async function createFixture(t) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-readiness-"));
+  const nowMilliseconds = Date.now();
+  const releaseCreatedAt = new Date(nowMilliseconds - 60_000).toISOString();
+  const billingObservedAt = new Date(nowMilliseconds - 4 * 60_000).toISOString();
+  const cloudRunObservedAt = new Date(nowMilliseconds - 3 * 60_000).toISOString();
+  const agentPlatformObservedAt = new Date(nowMilliseconds - 2 * 60_000).toISOString();
   t.after(async () => rm(repoRoot, { recursive: true, force: true }));
   for (const directory of [
     "docs",
@@ -382,6 +421,11 @@ async function createFixture(t) {
   );
   const architectureDocument = await readFile(path.join(projectRoot, "docs", "architecture.md"), "utf8");
   const deploymentDocument = await readFile(path.join(projectRoot, "docs", "deployment.md"), "utf8");
+  const verifierSource = await readFile(path.join(projectRoot, "scripts", "verify-submission-readiness.mjs"), "utf8");
+  const googleCloudResourceIdentity = await readFile(
+    path.join(projectRoot, "docs", "google-cloud-resource-identity.json"),
+    "utf8",
+  );
   const projectLicense = await readFile(path.join(projectRoot, "LICENSE"), "utf8");
   const projectNotice = await readFile(path.join(projectRoot, "NOTICE.md"), "utf8");
   const thirdPartyNotices = await readFile(path.join(projectRoot, "THIRD_PARTY_NOTICES.md"), "utf8");
@@ -621,9 +665,11 @@ async function createFixture(t) {
     ["artifacts/verification/service-client-http-smoke-receipt.json", localWorkflowReceipt],
     ["artifacts/verification/frontend-build-manifest.json", frontendManifestRaw],
     ["scripts/prepare-canonical-run.ps1", preparationScript],
+    ["scripts/verify-submission-readiness.mjs", verifierSource],
     ["docs/architecture.md", architectureDocument],
     ["docs/architecture-diagram.mmd", architectureSource],
     ["docs/architecture-diagram.png", architectureRender],
+    ["docs/google-cloud-resource-identity.json", googleCloudResourceIdentity],
     ["docs/deployment.md", deploymentDocument],
     ["docs/devpost-submission.md", "# Devpost copy\nCanonical evidence is attached.\n"],
     ["docs/demo-script.md", "# Demo script\nContinuous live run.\n"],
@@ -659,6 +705,245 @@ async function createFixture(t) {
   };
   const privacyPath = path.join(repoRoot, "artifacts", "private", "canonical-privacy-receipt.json");
   const privacyFile = await writeJson(privacyPath, privacyReceipt);
+  const billingCapture = fixturePng(800, 600);
+  const cloudRunCapture = fixturePng(801, 600);
+  const agentPlatformCapture = fixturePng(802, 600);
+  const billingCapturePath = path.join(repoRoot, "artifacts", "private", "billing-overview-redacted.png");
+  const cloudRunCapturePath = path.join(repoRoot, "artifacts", "private", "cloud-run-spend-cap-redacted.png");
+  const agentPlatformCapturePath = path.join(repoRoot, "artifacts", "private", "agent-platform-spend-cap-redacted.png");
+  await writeFile(billingCapturePath, billingCapture);
+  await writeFile(cloudRunCapturePath, cloudRunCapture);
+  await writeFile(agentPlatformCapturePath, agentPlatformCapture);
+  const billingPreflightReceipt = {
+    schema_version: "1",
+    kind: "found-roll-google-cloud-billing-preflight",
+    status: "PASS",
+    observed_at_utc: billingObservedAt,
+    project_id: "found-roll-agentic-20260830",
+    billing_account_name_sha256: "a".repeat(64),
+    account_type: "free_trial",
+    billing_enabled: true,
+    remaining_credit_visible: true,
+    remaining_credit_greater_than_zero: true,
+    remaining_time_visible: true,
+    remaining_time_greater_than_zero: true,
+    paid_activation_absent: true,
+    redacted_capture_path: "artifacts/private/billing-overview-redacted.png",
+    redacted_capture_sha256: sha256(billingCapture),
+    redacted_console_receipt_reviewed: true,
+  };
+  const cloudRunSpendCapReceipt = {
+    schema_version: "1",
+    kind: "found-roll-google-cloud-spend-cap-preflight",
+    status: "PASS",
+    observed_at_utc: cloudRunObservedAt,
+    project_id: "found-roll-agentic-20260830",
+    service_target: "cloud_run",
+    cap_status: "CONFIGURED",
+    project_scope_confirmed: true,
+    service_scope_confirmed: true,
+    lowest_practical_demo_target_confirmed: true,
+    redacted_capture_path: "artifacts/private/cloud-run-spend-cap-redacted.png",
+    redacted_capture_sha256: sha256(cloudRunCapture),
+    redacted_console_receipt_reviewed: true,
+  };
+  const agentPlatformSpendCapReceipt = {
+    ...cloudRunSpendCapReceipt,
+    observed_at_utc: agentPlatformObservedAt,
+    service_target: "agent_platform",
+    redacted_capture_path: "artifacts/private/agent-platform-spend-cap-redacted.png",
+    redacted_capture_sha256: sha256(agentPlatformCapture),
+  };
+  const billingPreflightPath = path.join(repoRoot, "artifacts", "private", "billing-overview-receipt.json");
+  const cloudRunSpendCapPath = path.join(repoRoot, "artifacts", "private", "cloud-run-spend-cap-receipt.json");
+  const agentPlatformSpendCapPath = path.join(repoRoot, "artifacts", "private", "agent-platform-spend-cap-receipt.json");
+  const billingPreflightFile = await writeJson(billingPreflightPath, billingPreflightReceipt);
+  const cloudRunSpendCapFile = await writeJson(cloudRunSpendCapPath, cloudRunSpendCapReceipt);
+  const agentPlatformSpendCapFile = await writeJson(agentPlatformSpendCapPath, agentPlatformSpendCapReceipt);
+  const appSourceRevision = "found-roll-app-00042-abc";
+  const canonicalAppRevision = "found-roll-app-00043-ghi";
+  const simulatorSourceRevision = "found-roll-simulator-00042-def";
+  const projectId = "found-roll-agentic-20260830";
+  const projectNumber = "1061926987746";
+  const region = "us-central1";
+  const appOrigin = "https://found-roll-api-abc.a.run.app";
+  const simulatorOrigin = "https://found-roll-sim-abc.a.run.app";
+  const appServiceResource = `projects/${projectNumber}/locations/${region}/services/found-roll-app`;
+  const simulatorServiceResource = `projects/${projectNumber}/locations/${region}/services/found-roll-simulator`;
+  const appImageDigest = `sha256:${"a".repeat(64)}`;
+  const simulatorImageDigest = `sha256:${"b".repeat(64)}`;
+  const repositoryUri = "us-central1-docker.pkg.dev/found-roll-agentic-20260830/cloud-run-source-deploy";
+  const appImagePackage = `${repositoryUri}/found-roll-app`;
+  const simulatorImagePackage = `${repositoryUri}/found-roll-simulator`;
+  const appImageResource = `${appImagePackage}@${appImageDigest}`;
+  const simulatorImageResource = `${simulatorImagePackage}@${simulatorImageDigest}`;
+  const currentObjects = [{ object_id_sha256: "8".repeat(64), generation: "1735689600000000", size_bytes: 100 }];
+  const allVersionObjects = structuredClone(currentObjects);
+  const softDeletedObjects = [];
+  const storageBucket = {
+    bucket: "found-roll-agentic-20260830-found-roll-evidence",
+    project_number: "1061926987746",
+    ordinary_bytes: 100,
+    soft_deleted_bytes: 0,
+    current_object_count: 1,
+    all_version_object_count: 1,
+    soft_deleted_object_count: 0,
+    versioning_enabled: false,
+    retention_policy_seconds: 0,
+    soft_delete_seconds: 0,
+    current_object_inventory_sha256: sha256(canonicalJson(currentObjects)),
+    all_version_object_inventory_sha256: sha256(canonicalJson(allVersionObjects)),
+    soft_deleted_object_inventory_sha256: sha256(canonicalJson(softDeletedObjects)),
+    current_objects: currentObjects,
+    all_version_objects: allVersionObjects,
+    soft_deleted_objects: softDeletedObjects,
+  };
+  const appBuild = {
+    build_id: "build-app-00042",
+    location: "global",
+    build_resource: `projects/${projectNumber}/locations/global/builds/build-app-00042`,
+    status: "SUCCESS",
+    created_at_utc: new Date(nowMilliseconds - 42 * 60_000).toISOString(),
+    finished_at_utc: new Date(nowMilliseconds - 41 * 60_000).toISOString(),
+    source_location_sha256: "d".repeat(64),
+    image_digests: [appImageDigest],
+    image_resources: [appImageResource],
+  };
+  const simulatorBuild = {
+    build_id: "build-simulator-00042",
+    location: "us-central1",
+    build_resource: `projects/${projectNumber}/locations/us-central1/builds/build-simulator-00042`,
+    status: "SUCCESS",
+    created_at_utc: new Date(nowMilliseconds - 37 * 60_000).toISOString(),
+    finished_at_utc: new Date(nowMilliseconds - 36 * 60_000).toISOString(),
+    source_location_sha256: "e".repeat(64),
+    image_digests: [simulatorImageDigest],
+    image_resources: [simulatorImageResource],
+  };
+  const appImage = {
+    repository_uri: repositoryUri,
+    package: appImagePackage,
+    digest: appImageDigest,
+    size_bytes: 2_000,
+  };
+  const simulatorImage = {
+    repository_uri: repositoryUri,
+    package: simulatorImagePackage,
+    digest: simulatorImageDigest,
+    size_bytes: 3_000,
+  };
+  const makeStorageReceipt = ({ phase, service, revision, revisionImageDigest, revisionImageResource, sourceBuild, createdAt, observedAt, builds, images, revisionImages }) => {
+    const repositories = [{
+      repository: "cloud-run-source-deploy",
+      location: "us-central1",
+      format: "DOCKER",
+      repository_uri: repositoryUri,
+      artifact_count: images.length,
+      artifact_size_bytes: images.reduce((sum, image) => sum + image.size_bytes, 0),
+    }];
+    const buildIdentities = builds.map((build) => ({
+      build_id: build.build_id,
+      location: build.location,
+      build_resource: build.build_resource,
+    }));
+    const imageSizeBytes = images.reduce((sum, image) => sum + image.size_bytes, 0);
+    return {
+      schema_version: "1",
+      kind: "found-roll-google-cloud-project-storage-audit",
+      status: "PASS",
+      phase,
+      observed_at_utc: observedAt,
+      project_id: "found-roll-agentic-20260830",
+      project_number: "1061926987746",
+      service,
+      revision,
+      revision_created_at_utc: createdAt,
+      revision_image_digest: revisionImageDigest,
+      revision_image_resource: revisionImageResource,
+      source_deploy_build_id: sourceBuild.build_id,
+      source_deploy_build_location: sourceBuild.location,
+      source_deploy_build_resource: sourceBuild.build_resource,
+      source_deploy_build_binding_source: "cloud-run-build-annotations",
+      source_deploy_build_source_location_sha256: sourceBuild.source_location_sha256,
+      maximum_bytes_exclusive: 5 * 1024 * 1024 * 1024,
+      observed_bytes: storageBucket.ordinary_bytes + imageSizeBytes,
+      active_bucket_inventory_sha256: sha256(canonicalJson([storageBucket])),
+      soft_deleted_bucket_inventory_sha256: sha256(canonicalJson([])),
+      soft_deleted_bucket_count: 0,
+      cloud_build_inventory_sha256: sha256(canonicalJson(builds)),
+      cloud_build_locations: ["global", "us-central1"],
+      cloud_build_locations_source: "cloud-build-v2-paginated-project-locations+global",
+      direct_build_identity_inventory_sha256: sha256(canonicalJson(buildIdentities)),
+      direct_build_identity_count: buildIdentities.length,
+      direct_build_inventory_stable: true,
+      cloud_build_asset_snapshot_before_sha256: sha256(canonicalJson(buildIdentities)),
+      cloud_build_asset_snapshot_before_count: buildIdentities.length,
+      cloud_build_asset_inventory_sha256: sha256(canonicalJson(buildIdentities)),
+      cloud_build_asset_count: buildIdentities.length,
+      cloud_build_asset_inventory_exhaustive: false,
+      cloud_build_asset_snapshot_before_utc: new Date(Date.parse(observedAt) - 2_000).toISOString(),
+      cloud_build_asset_snapshot_after_utc: new Date(Date.parse(observedAt) - 1_000).toISOString(),
+      cloud_build_asset_inventory_stable: true,
+      completed_build_count: builds.length,
+      build_inventory_exhaustive: true,
+      artifact_repository_inventory_sha256: sha256(canonicalJson(repositories)),
+      repository_count: repositories.length,
+      repository_inventory_exhaustive: true,
+      artifact_image_inventory_sha256: sha256(canonicalJson(images)),
+      image_digest_count: images.length,
+      image_size_bytes: imageSizeBytes,
+      artifact_inventory_exhaustive: true,
+      soft_deleted_bucket_inventory_exhaustive: true,
+      soft_deleted_object_inventory_exhaustive: true,
+      image_digests_and_sizes_included: true,
+      buckets: [storageBucket],
+      soft_deleted_buckets: [],
+      builds,
+      cloud_build_assets_before: structuredClone(buildIdentities),
+      cloud_build_assets: structuredClone(buildIdentities),
+      artifact_repositories: repositories,
+      artifact_images: images,
+      revision_images: revisionImages,
+    };
+  };
+  const appStorageReceipt = makeStorageReceipt({
+    phase: "after_app_source_deploy",
+    service: "found-roll-app",
+    revision: appSourceRevision,
+    revisionImageDigest: appImageDigest,
+    revisionImageResource: appImageResource,
+    sourceBuild: appBuild,
+    createdAt: new Date(nowMilliseconds - 40 * 60_000).toISOString(),
+    observedAt: new Date(nowMilliseconds - 39 * 60_000).toISOString(),
+    builds: [appBuild],
+    images: [appImage],
+    revisionImages: [{ service: "found-roll-app", revision: appSourceRevision, image_digest: appImageDigest, image_package: appImagePackage, image_resource: appImageResource }],
+  });
+  const simulatorStorageReceipt = makeStorageReceipt({
+    phase: "after_simulator_source_deploy",
+    service: "found-roll-simulator",
+    revision: simulatorSourceRevision,
+    revisionImageDigest: simulatorImageDigest,
+    revisionImageResource: simulatorImageResource,
+    sourceBuild: simulatorBuild,
+    createdAt: new Date(nowMilliseconds - 35 * 60_000).toISOString(),
+    observedAt: new Date(nowMilliseconds - 34 * 60_000).toISOString(),
+    builds: [appBuild, simulatorBuild],
+    images: [appImage, simulatorImage],
+    revisionImages: [
+      { service: "found-roll-app", revision: appSourceRevision, image_digest: appImageDigest, image_package: appImagePackage, image_resource: appImageResource },
+      { service: "found-roll-simulator", revision: simulatorSourceRevision, image_digest: simulatorImageDigest, image_package: simulatorImagePackage, image_resource: simulatorImageResource },
+    ],
+  });
+  const appStoragePath = path.join(repoRoot, "artifacts", "private", "storage-after-app-source-deploy.json");
+  const simulatorStoragePath = path.join(
+    repoRoot,
+    "artifacts",
+    "private",
+    "storage-after-simulator-source-deploy.json",
+  );
+  const appStorageFile = await writeJson(appStoragePath, appStorageReceipt);
+  const simulatorStorageFile = await writeJson(simulatorStoragePath, simulatorStorageReceipt);
   const fixtureDigest = frozenFiles.find((binding) => binding.path === "evaluation/fixtures.json").sha256;
   const frontendDigest = frozenFiles.find((binding) => binding.path === "artifacts/verification/frontend-build-manifest.json").sha256;
   const preparationScriptDigest = frozenFiles.find((binding) => binding.path === "scripts/prepare-canonical-run.ps1").sha256;
@@ -673,7 +958,8 @@ async function createFixture(t) {
   for (let ordinal = 1; ordinal <= 5; ordinal += 1) {
     const workflowEpoch = `epoch-20260829-0042-${ordinal}`;
     const preparationReceipt = validPreparationReceipt(versions, workflowEpoch);
-    preparationReceipt.prepared_at = `2026-08-29T20:0${ordinal}:00Z`;
+    const preparedMilliseconds = nowMilliseconds - (31 - ordinal * 3) * 60_000;
+    preparationReceipt.prepared_at = new Date(preparedMilliseconds).toISOString();
     preparationReceipt.preparation_script_sha256 = preparationScriptDigest;
     preparationReceipt.evidence.original_id = `evd-original-0042-${ordinal}`;
     preparationReceipt.evidence.preview_id = `evd-preview-0042-${ordinal}`;
@@ -697,6 +983,10 @@ async function createFixture(t) {
       privacyDigest: privacyFile.digest,
       frontendDigest,
     });
+    runReceipt.started_at_utc = new Date(preparedMilliseconds + 30_000).toISOString();
+    runReceipt.ended_at_utc = new Date(preparedMilliseconds + 90_000).toISOString();
+    runReceipt.app_revision = canonicalAppRevision;
+    runReceipt.simulator_revision = simulatorSourceRevision;
     const chainAudit = makeChainAudit({
       runReceipt,
       preparationReceipt,
@@ -704,6 +994,10 @@ async function createFixture(t) {
       tree,
       ordinal,
     });
+    chainAudit.events.forEach((event, eventIndex) => {
+      event.occurred_at = new Date(preparedMilliseconds + 32_000 + eventIndex * 2_000).toISOString();
+    });
+    refreshChainAuditBindings(chainAudit, runReceipt);
     const runRelative = `artifacts/private/canonical-run-${ordinal}.json`;
     const runPath = path.join(repoRoot, runRelative);
     const runFile = await writeJson(runPath, runReceipt);
@@ -731,11 +1025,11 @@ async function createFixture(t) {
     schema_version: "1",
     kind: "found-roll-clean-browser",
     status: "PASS",
-    verified_at_utc: "2026-08-29T20:30:00Z",
+    verified_at_utc: new Date(nowMilliseconds - 10 * 60_000).toISOString(),
     submitted_commit: commit,
     hosted_url: "https://found-roll.web.app",
-    app_revision: "found-roll-app-00042-abc",
-    simulator_revision: "found-roll-simulator-00042-def",
+    app_revision: canonicalAppRevision,
+    simulator_revision: simulatorSourceRevision,
     frontend_manifest_sha256: frontendDigest,
     judge_access_verified: true,
     current_rendered_design_verified: true,
@@ -746,7 +1040,7 @@ async function createFixture(t) {
     schema_version: "2",
     kind: "found-roll-submission-release",
     status: "FROZEN",
-    created_at_utc: "2026-08-29T21:00:00Z",
+    created_at_utc: releaseCreatedAt,
     category: "Taskmaster",
     eligibility: {
       entrant_eligible_confirmed: true,
@@ -761,8 +1055,13 @@ async function createFixture(t) {
       truthful_mode_confirmed: true,
     },
     google_cloud: {
-      project_id: "found-roll-demo-123",
+      project_id: "found-roll-agentic-20260830",
+      project_number: "1061926987746",
+      project_created_at_utc: "2026-08-29T22:58:52.064Z",
+      evidence_bucket: "found-roll-agentic-20260830-found-roll-evidence",
       dedicated_project_confirmed: true,
+      dedicated_project_label_key: "found-roll-purpose",
+      dedicated_project_label_value: "dedicated-hackathon-demo",
       billing_enabled_confirmed: true,
       billing_account_type: "free_trial",
       free_trial_remaining_credit_confirmed: true,
@@ -773,6 +1072,64 @@ async function createFixture(t) {
       required_apis_enabled_confirmed: true,
       iam_ready_confirmed: true,
       quota_ready_confirmed: true,
+      resource_identity: {
+        path: "docs/google-cloud-resource-identity.json",
+        sha256: sha256(googleCloudResourceIdentity),
+      },
+      canonical_revision_images: {
+        app: {
+          project_id: projectId,
+          project_number: projectNumber,
+          region,
+          service: "found-roll-app",
+          service_resource: appServiceResource,
+          origin: appOrigin,
+          revision: canonicalAppRevision,
+          revision_resource: `${appServiceResource}/revisions/${canonicalAppRevision}`,
+          revision_created_at_utc: new Date(nowMilliseconds - 30 * 60_000).toISOString(),
+          image_digest: appImageDigest,
+          image_package: appImagePackage,
+          image_resource: appImageResource,
+        },
+        simulator: {
+          project_id: projectId,
+          project_number: projectNumber,
+          region,
+          service: "found-roll-simulator",
+          service_resource: simulatorServiceResource,
+          origin: simulatorOrigin,
+          revision: simulatorSourceRevision,
+          revision_resource: `${simulatorServiceResource}/revisions/${simulatorSourceRevision}`,
+          revision_created_at_utc: simulatorStorageReceipt.revision_created_at_utc,
+          image_digest: simulatorImageDigest,
+          image_package: simulatorImagePackage,
+          image_resource: simulatorImageResource,
+        },
+      },
+      project_storage_receipts: {
+        after_app_source_deploy: {
+          path: "artifacts/private/storage-after-app-source-deploy.json",
+          sha256: appStorageFile.digest,
+        },
+        after_simulator_source_deploy: {
+          path: "artifacts/private/storage-after-simulator-source-deploy.json",
+          sha256: simulatorStorageFile.digest,
+        },
+      },
+      preflight_receipts: {
+        billing_overview: {
+          path: "artifacts/private/billing-overview-receipt.json",
+          sha256: billingPreflightFile.digest,
+        },
+        cloud_run_spend_cap: {
+          path: "artifacts/private/cloud-run-spend-cap-receipt.json",
+          sha256: cloudRunSpendCapFile.digest,
+        },
+        agent_platform_spend_cap: {
+          path: "artifacts/private/agent-platform-spend-cap-receipt.json",
+          sha256: agentPlatformSpendCapFile.digest,
+        },
+      },
     },
     hosted_project: {
       url: "https://found-roll.web.app",
@@ -860,6 +1217,7 @@ async function createFixture(t) {
     record,
     recordPath,
     gitState,
+    nowMilliseconds,
     preparationReceipts,
     runReceipts,
     chainAudits,
@@ -870,6 +1228,19 @@ async function createFixture(t) {
     privacyPath,
     cleanBrowserReceipt,
     cleanBrowserPath,
+    billingPreflightReceipt,
+    billingPreflightPath,
+    billingCapturePath,
+    cloudRunSpendCapReceipt,
+    cloudRunSpendCapPath,
+    cloudRunCapturePath,
+    agentPlatformSpendCapReceipt,
+    agentPlatformSpendCapPath,
+    agentPlatformCapturePath,
+    appStorageReceipt,
+    appStoragePath,
+    simulatorStorageReceipt,
+    simulatorStoragePath,
   };
 }
 
@@ -912,6 +1283,556 @@ test("cloud readiness requires an active free trial and both service spend caps"
   assert.equal(
     result.failures.some((failure) => failure.code === "RECORD_MISSING_FIELD" && failure.message.includes("google_cloud.agent_platform_spend_cap_confirmed")),
     true,
+  );
+
+  fixture.record.google_cloud.agent_platform_spend_cap_confirmed = true;
+  fixture.record.google_cloud.dedicated_project_label_value = "shared-project";
+  result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("DEDICATED_PROJECT_LABEL"), true);
+});
+
+test("cloud preflight binds fresh Billing Overview and both configured service-cap receipts", async (t) => {
+  const fixture = await createFixture(t);
+  let result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.deepEqual(result, { ok: true, failures: [] });
+
+  fixture.record.google_cloud.required_apis_enabled_confirmed = false;
+  fixture.record.google_cloud.iam_ready_confirmed = false;
+  fixture.record.google_cloud.quota_ready_confirmed = false;
+  result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.deepEqual(result, { ok: true, failures: [] });
+
+  fixture.billingPreflightReceipt.paid_activation_absent = false;
+  const rewrittenBilling = await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt);
+  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = rewrittenBilling.digest;
+  result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_RECEIPT"), true);
+
+  fixture.billingPreflightReceipt.paid_activation_absent = true;
+  const restoredBilling = await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt);
+  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = restoredBilling.digest;
+  fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap.sha256 = "0".repeat(64);
+  result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("RECEIPT_DIGEST_MISMATCH"), true);
+
+  fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap.sha256 = (
+    await writeJson(fixture.cloudRunSpendCapPath, fixture.cloudRunSpendCapReceipt)
+  ).digest;
+  await appendFile(fixture.cloudRunCapturePath, "capture-drift", "utf8");
+  result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+
+  fixture.billingPreflightReceipt.observed_at_utc = "2026-08-27T20:40:00Z";
+  const staleBilling = await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt);
+  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = staleBilling.digest;
+  result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+});
+
+test("operational cloud preflight requires ten-minute Chrome evidence while full readiness permits 24 hours", async (t) => {
+  const fixture = await createFixture(t);
+  const observedAt = new Date(fixture.nowMilliseconds - 12 * 60_000).toISOString();
+  for (const [receipt, receiptPath, binding] of [
+    [fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview],
+    [fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap],
+    [fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap],
+  ]) {
+    receipt.observed_at_utc = observedAt;
+    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+  }
+  const full = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.deepEqual(full, { ok: true, failures: [] });
+  const operational = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(operational).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+});
+
+test("billing preflight binds a private hash of the exact live billing account resource", async (t) => {
+  const fixture = await createFixture(t);
+  delete fixture.billingPreflightReceipt.billing_account_name_sha256;
+  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = (
+    await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt)
+  ).digest;
+  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("SHA256_REQUIRED"), true);
+});
+
+test("the tracked Google Cloud identity cannot be self-minted by changing the release record", async (t) => {
+  const fixture = await createFixture(t);
+  const identityPath = path.join(fixture.repoRoot, "docs", "google-cloud-resource-identity.json");
+  const changedIdentity = JSON.parse(await readFile(identityPath, "utf8"));
+  changedIdentity.project_id = "found-roll-agentic-wrong-project";
+  changedIdentity.evidence_bucket = "found-roll-agentic-wrong-project-found-roll-evidence";
+  const changedRaw = `${JSON.stringify(changedIdentity, null, 2)}\n`;
+  await writeFile(identityPath, changedRaw, "utf8");
+  fixture.record.google_cloud.project_id = changedIdentity.project_id;
+  fixture.record.google_cloud.evidence_bucket = changedIdentity.evidence_bucket;
+  fixture.record.google_cloud.resource_identity.sha256 = sha256(changedRaw);
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/google-cloud-resource-identity.json").sha256 = sha256(changedRaw);
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_RESOURCE_IDENTITY"), true);
+});
+
+test("post-source-deploy storage receipts fail closed on scope, timing, retention, and ceiling", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.simulatorStorageReceipt.phase = "after_app_source_deploy";
+  fixture.simulatorStorageReceipt.project_number = "999999999999";
+  fixture.simulatorStorageReceipt.revision = "found-roll-simulator-00099-zzz";
+  fixture.simulatorStorageReceipt.observed_at_utc = new Date(fixture.nowMilliseconds).toISOString();
+  fixture.simulatorStorageReceipt.revision_created_at_utc = new Date(
+    fixture.nowMilliseconds - 11 * 60_000,
+  ).toISOString();
+  fixture.simulatorStorageReceipt.soft_deleted_bucket_count = 1;
+  fixture.simulatorStorageReceipt.observed_bytes = 5 * 1024 * 1024 * 1024;
+  fixture.simulatorStorageReceipt.buckets[0].soft_deleted_bytes = 1;
+  fixture.simulatorStorageReceipt.buckets[0].soft_deleted_object_count = 1;
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  const codes = failureCodes(result);
+  for (const code of [
+    "PROJECT_STORAGE_RECEIPT",
+    "PROJECT_STORAGE_AUDIT_TIMING",
+    "PROJECT_STORAGE_CEILING",
+    "PROJECT_STORAGE_RETENTION",
+  ]) assert.equal(codes.has(code), true, `missing ${code}`);
+});
+
+test("storage receipts reject wrong-service revisions and pre-project timestamps", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.appStorageReceipt.revision = "found-roll-simulator-00042-abc";
+  fixture.appStorageReceipt.revision_images[0].revision = fixture.appStorageReceipt.revision;
+  const projectCreated = Date.parse(fixture.record.google_cloud.project_created_at_utc);
+  fixture.appStorageReceipt.revision_created_at_utc = new Date(projectCreated - 2 * 60_000).toISOString();
+  fixture.appStorageReceipt.observed_at_utc = new Date(projectCreated - 60_000).toISOString();
+  fixture.record.google_cloud.project_storage_receipts.after_app_source_deploy.sha256 = (
+    await writeJson(fixture.appStoragePath, fixture.appStorageReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  const codes = failureCodes(result);
+  assert.equal(codes.has("PROJECT_STORAGE_SERVICE_REVISION"), true);
+  assert.equal(codes.has("PROJECT_STORAGE_TIMELINE"), true);
+});
+
+test("storage receipts require the exact evidence bucket and recomputable inventories", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.simulatorStorageReceipt.buckets[0].bucket = "unrelated-build-bucket";
+  fixture.simulatorStorageReceipt.active_bucket_inventory_sha256 = sha256(canonicalJson(fixture.simulatorStorageReceipt.buckets));
+  fixture.simulatorStorageReceipt.cloud_build_inventory_sha256 = "f".repeat(64);
+  fixture.simulatorStorageReceipt.artifact_repositories[0].format = "GENERIC";
+  fixture.simulatorStorageReceipt.artifact_repository_inventory_sha256 = sha256(
+    canonicalJson(fixture.simulatorStorageReceipt.artifact_repositories),
+  );
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  const codes = failureCodes(result);
+  assert.equal(codes.has("PROJECT_STORAGE_EVIDENCE_BUCKET"), true);
+  assert.equal(codes.has("PROJECT_STORAGE_INVENTORY_HASH"), true);
+  assert.equal(codes.has("PROJECT_STORAGE_NON_DOCKER_REPOSITORY"), true);
+});
+
+test("a forged bucket child hash fails even when the parent inventory hash is recomputed", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.simulatorStorageReceipt.buckets[0].current_object_inventory_sha256 = "f".repeat(64);
+  fixture.simulatorStorageReceipt.active_bucket_inventory_sha256 = sha256(
+    canonicalJson(fixture.simulatorStorageReceipt.buckets),
+  );
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_OBJECT_INVENTORY_HASH"), true);
+});
+
+test("Artifact Registry repository URIs cannot point at a foreign project", async (t) => {
+  const fixture = await createFixture(t);
+  const receipt = fixture.simulatorStorageReceipt;
+  const originalUri = receipt.artifact_repositories[0].repository_uri;
+  const foreignUri = "us-central1-docker.pkg.dev/foreign-project/cloud-run-source-deploy";
+  receipt.artifact_repositories[0].repository_uri = foreignUri;
+  for (const image of receipt.artifact_images) {
+    image.repository_uri = foreignUri;
+    image.package = image.package.replace(originalUri, foreignUri);
+  }
+  receipt.artifact_repository_inventory_sha256 = sha256(canonicalJson(receipt.artifact_repositories));
+  receipt.artifact_image_inventory_sha256 = sha256(canonicalJson(receipt.artifact_images));
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, receipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_REPOSITORY_IDENTITY"), true);
+});
+
+test("canonical runs bind the exact project bucket, Cloud Run origins, and service revisions", async (t) => {
+  const fixture = await createFixture(t);
+  const run = fixture.runReceipts[0];
+  run.cloud_boundary.evidence_bucket = "foreign-project-evidence";
+  run.app_origin = "https://foreign-app-abc.a.run.app";
+  run.simulator_origin = "https://foreign-simulator-abc.a.run.app";
+  run.app_revision = "found-roll-app-00099-zzz";
+  run.simulator_revision = "found-roll-simulator-00099-yyy";
+  fixture.record.receipts.canonical_runs[0].run_sha256 = (await writeJson(fixture.runPaths[0], run)).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  const bindingMessages = result.failures
+    .filter((failure) => failure.code === "RECEIPT_BINDING")
+    .map((failure) => failure.message)
+    .join("\n");
+  for (const field of ["cloud_boundary.evidence_bucket", "app_origin", "simulator_origin", "app_revision", "simulator_revision"]) {
+    assert.equal(bindingMessages.includes(field), true, `missing exact ${field} binding failure`);
+  }
+});
+
+test("a colluding run set and clean-browser receipt cannot replace the exact app revision binding", async (t) => {
+  const fixture = await createFixture(t);
+  const substitutedRevision = "found-roll-app-00099-zzz";
+  for (let index = 0; index < fixture.runReceipts.length; index += 1) {
+    fixture.runReceipts[index].app_revision = substitutedRevision;
+    fixture.record.receipts.canonical_runs[index].run_sha256 = (
+      await writeJson(fixture.runPaths[index], fixture.runReceipts[index])
+    ).digest;
+  }
+  fixture.cleanBrowserReceipt.app_revision = substitutedRevision;
+  fixture.record.receipts.clean_browser_sha256 = (
+    await writeJson(fixture.cleanBrowserPath, fixture.cleanBrowserReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(
+    result.failures.some((failure) => failure.code === "RECEIPT_BINDING" && failure.message.includes("app_revision")),
+    true,
+  );
+});
+
+test("canonical Cloud Run resource bindings cannot move to a foreign project", async (t) => {
+  const fixture = await createFixture(t);
+  for (const binding of Object.values(fixture.record.google_cloud.canonical_revision_images)) {
+    binding.project_id = "foreign-project-00001";
+    binding.project_number = "999999999999";
+    binding.service_resource = `projects/${binding.project_number}/locations/${binding.region}/services/${binding.service}`;
+    binding.revision_resource = `${binding.service_resource}/revisions/${binding.revision}`;
+    binding.origin = "https://unrelated.example.com";
+  }
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("CANONICAL_REVISION_IMAGE"), true);
+  const messages = result.failures
+    .filter((failure) => failure.code === "CANONICAL_REVISION_IMAGE")
+    .map((failure) => failure.message)
+    .join("\n");
+  assert.equal(messages.includes("canonical_revision_images.app"), true);
+  assert.equal(messages.includes("canonical_revision_images.simulator"), true);
+});
+
+test("source builds must finish before their bound Cloud Run revisions are created", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.appStorageReceipt.builds[0].finished_at_utc = new Date(
+    Date.parse(fixture.appStorageReceipt.revision_created_at_utc) + 1_000,
+  ).toISOString();
+  fixture.appStorageReceipt.cloud_build_inventory_sha256 = sha256(canonicalJson(fixture.appStorageReceipt.builds));
+  fixture.record.google_cloud.project_storage_receipts.after_app_source_deploy.sha256 = (
+    await writeJson(fixture.appStoragePath, fixture.appStorageReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_BUILD_BINDING"), true);
+});
+
+test("the simulator phase must carry forward the exact app source-build record", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.simulatorStorageReceipt.builds[0].finished_at_utc = new Date(
+    Date.parse(fixture.simulatorStorageReceipt.builds[0].finished_at_utc) + 1_000,
+  ).toISOString();
+  fixture.simulatorStorageReceipt.cloud_build_inventory_sha256 = sha256(
+    canonicalJson(fixture.simulatorStorageReceipt.builds),
+  );
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_PHASE_BINDING"), true);
+});
+
+test("build receipts bind exact locations, source objects, direct identities, and supplemental assets", async (t) => {
+  const sourceFixture = await createFixture(t);
+  sourceFixture.simulatorStorageReceipt.source_deploy_build_source_location_sha256 = "f".repeat(64);
+  sourceFixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(sourceFixture.simulatorStoragePath, sourceFixture.simulatorStorageReceipt)
+  ).digest;
+  let result = await verifySubmissionReadiness(sourceFixture.record, sourceFixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_BUILD_BINDING"), true);
+
+  const identityFixture = await createFixture(t);
+  identityFixture.simulatorStorageReceipt.direct_build_identity_count += 1;
+  identityFixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(identityFixture.simulatorStoragePath, identityFixture.simulatorStorageReceipt)
+  ).digest;
+  result = await verifySubmissionReadiness(identityFixture.record, identityFixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_BUILD_INVENTORY"), true);
+
+  const assetFixture = await createFixture(t);
+  const unknownAsset = {
+    build_id: "foreign-build",
+    location: "us-central1",
+    build_resource: `projects/${assetFixture.record.google_cloud.project_number}/locations/us-central1/builds/foreign-build`,
+  };
+  assetFixture.simulatorStorageReceipt.cloud_build_assets.push(unknownAsset);
+  assetFixture.simulatorStorageReceipt.cloud_build_asset_count += 1;
+  assetFixture.simulatorStorageReceipt.cloud_build_asset_inventory_sha256 = sha256(
+    canonicalJson(assetFixture.simulatorStorageReceipt.cloud_build_assets),
+  );
+  assetFixture.simulatorStorageReceipt.cloud_build_asset_inventory_stable = false;
+  assetFixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(assetFixture.simulatorStoragePath, assetFixture.simulatorStorageReceipt)
+  ).digest;
+  result = await verifySubmissionReadiness(assetFixture.record, assetFixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_BUILD_ASSET_INVENTORY"), true);
+});
+
+test("supplemental Cloud Asset lag cannot omit authoritative direct builds or invent identities", async (t) => {
+  const fixture = await createFixture(t);
+  const appIdentity = fixture.simulatorStorageReceipt.cloud_build_assets[0];
+  fixture.simulatorStorageReceipt.cloud_build_assets_before = [structuredClone(appIdentity)];
+  fixture.simulatorStorageReceipt.cloud_build_assets = [structuredClone(appIdentity)];
+  fixture.simulatorStorageReceipt.cloud_build_asset_snapshot_before_count = 1;
+  fixture.simulatorStorageReceipt.cloud_build_asset_count = 1;
+  fixture.simulatorStorageReceipt.cloud_build_asset_snapshot_before_sha256 = sha256(
+    canonicalJson(fixture.simulatorStorageReceipt.cloud_build_assets_before),
+  );
+  fixture.simulatorStorageReceipt.cloud_build_asset_inventory_sha256 = sha256(
+    canonicalJson(fixture.simulatorStorageReceipt.cloud_build_assets),
+  );
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, true, formatReadinessResult(result));
+});
+
+test("authoritative build annotations resolve equal-digest builds without selecting a latest candidate", async (t) => {
+  const fixture = await createFixture(t);
+  const extraBuild = structuredClone(fixture.simulatorStorageReceipt.builds.at(-1));
+  extraBuild.build_id = "build-simulator-equal-digest";
+  extraBuild.build_resource = `projects/${fixture.record.google_cloud.project_number}/locations/us-central1/builds/${extraBuild.build_id}`;
+  extraBuild.source_location_sha256 = "f".repeat(64);
+  extraBuild.created_at_utc = new Date(Date.parse(extraBuild.created_at_utc) - 2_000).toISOString();
+  extraBuild.finished_at_utc = new Date(Date.parse(extraBuild.finished_at_utc) - 2_000).toISOString();
+  fixture.simulatorStorageReceipt.builds.push(extraBuild);
+  refreshStorageBuildProof(fixture.simulatorStorageReceipt, { refreshAssets: true });
+  fixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(fixture.simulatorStoragePath, fixture.simulatorStorageReceipt)
+  ).digest;
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, true, formatReadinessResult(result));
+});
+
+test("exact package-at-digest binding rejects wrong and malformed image resources", async (t) => {
+  const wrongPackageFixture = await createFixture(t);
+  wrongPackageFixture.simulatorStorageReceipt.artifact_images[1].package = wrongPackageFixture.simulatorStorageReceipt.artifact_images[0].package;
+  wrongPackageFixture.simulatorStorageReceipt.artifact_image_inventory_sha256 = sha256(
+    canonicalJson(wrongPackageFixture.simulatorStorageReceipt.artifact_images),
+  );
+  wrongPackageFixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(wrongPackageFixture.simulatorStoragePath, wrongPackageFixture.simulatorStorageReceipt)
+  ).digest;
+  let result = await verifySubmissionReadiness(wrongPackageFixture.record, wrongPackageFixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_IMAGE_BINDING"), true);
+
+  const malformedFixture = await createFixture(t);
+  const receipt = malformedFixture.simulatorStorageReceipt;
+  const malformedPackage = `${receipt.artifact_images[1].repository_uri}/bad:tag`;
+  const malformedResource = `${malformedPackage}@${receipt.revision_image_digest}`;
+  receipt.revision_image_resource = malformedResource;
+  receipt.artifact_images[1].package = malformedPackage;
+  receipt.builds.find((build) => build.build_resource === receipt.source_deploy_build_resource).image_resources = [malformedResource];
+  receipt.revision_images.find((binding) => binding.service === "found-roll-simulator").image_package = malformedPackage;
+  receipt.revision_images.find((binding) => binding.service === "found-roll-simulator").image_resource = malformedResource;
+  refreshStorageBuildProof(receipt);
+  receipt.artifact_image_inventory_sha256 = sha256(canonicalJson(receipt.artifact_images));
+  malformedFixture.record.google_cloud.canonical_revision_images.simulator.image_package = malformedPackage;
+  malformedFixture.record.google_cloud.canonical_revision_images.simulator.image_resource = malformedResource;
+  malformedFixture.record.google_cloud.project_storage_receipts.after_simulator_source_deploy.sha256 = (
+    await writeJson(malformedFixture.simulatorStoragePath, receipt)
+  ).digest;
+  result = await verifySubmissionReadiness(malformedFixture.record, malformedFixture);
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_IMAGE_BINDING") || failureCodes(result).has("CANONICAL_REVISION_IMAGE"), true);
+});
+
+test("storage receipts expire against the release timeline", async (t) => {
+  const fixture = await createFixture(t);
+  const releaseTime = Date.parse(fixture.appStorageReceipt.observed_at_utc) + 25 * 60 * 60 * 1000;
+  fixture.record.created_at_utc = new Date(releaseTime).toISOString();
+  for (const [receipt, receiptPath, binding, minutes] of [
+    [fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview, 4],
+    [fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap, 3],
+    [fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap, 2],
+  ]) {
+    receipt.observed_at_utc = new Date(releaseTime - minutes * 60_000).toISOString();
+    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+  }
+  const result = await verifySubmissionReadiness(fixture.record, { ...fixture, nowMilliseconds: releaseTime });
+  assert.equal(failureCodes(result).has("PROJECT_STORAGE_FRESHNESS"), true);
+});
+
+test("canonical run revisions are hash-bound to source-deployed images", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.record.google_cloud.canonical_revision_images.app.image_digest = `sha256:${"c".repeat(64)}`;
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("CANONICAL_REVISION_IMAGE"), true);
+});
+
+test("clean-browser verification must follow all runs and remain fresh", async (t) => {
+  const chronologicalFixture = await createFixture(t);
+  chronologicalFixture.cleanBrowserReceipt.verified_at_utc = new Date(
+    Math.max(...chronologicalFixture.runReceipts.map((receipt) => Date.parse(receipt.ended_at_utc))) - 1_000,
+  ).toISOString();
+  chronologicalFixture.record.receipts.clean_browser_sha256 = (
+    await writeJson(chronologicalFixture.cleanBrowserPath, chronologicalFixture.cleanBrowserReceipt)
+  ).digest;
+  const chronologicalResult = await verifySubmissionReadiness(chronologicalFixture.record, chronologicalFixture);
+  assert.equal(failureCodes(chronologicalResult).has("CLEAN_BROWSER_FRESHNESS"), true);
+
+  const simultaneousFixture = await createFixture(t);
+  simultaneousFixture.cleanBrowserReceipt.verified_at_utc = simultaneousFixture.record.created_at_utc;
+  simultaneousFixture.record.receipts.clean_browser_sha256 = (
+    await writeJson(simultaneousFixture.cleanBrowserPath, simultaneousFixture.cleanBrowserReceipt)
+  ).digest;
+  const simultaneousResult = await verifySubmissionReadiness(simultaneousFixture.record, simultaneousFixture);
+  assert.equal(failureCodes(simultaneousResult).has("CLEAN_BROWSER_FRESHNESS"), true);
+
+  const staleFixture = await createFixture(t);
+  staleFixture.cleanBrowserReceipt.verified_at_utc = new Date(
+    staleFixture.nowMilliseconds - 25 * 60 * 60 * 1_000,
+  ).toISOString();
+  staleFixture.record.receipts.clean_browser_sha256 = (
+    await writeJson(staleFixture.cleanBrowserPath, staleFixture.cleanBrowserReceipt)
+  ).digest;
+  const staleResult = await verifySubmissionReadiness(staleFixture.record, staleFixture);
+  assert.equal(failureCodes(staleResult).has("CLEAN_BROWSER_FRESHNESS"), true);
+});
+
+test("teardown identity ignores stale billing evidence but requires the frozen release identity", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.record.created_at_utc = "2026-01-01T00:00:00Z";
+  const result = await verifyGoogleCloudTeardownIdentity(fixture.record, fixture);
+  assert.deepEqual(result, { ok: true, failures: [] });
+
+  fixture.gitState.tagCommit = "9".repeat(40);
+  const changed = await verifyGoogleCloudTeardownIdentity(fixture.record, fixture);
+  assert.equal(failureCodes(changed).has("TAG_MISMATCH"), true);
+});
+
+test("cloud preflight rejects receipts that are mutually fresh but stale against the wall clock", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.record.created_at_utc = "2000-01-02T00:00:00Z";
+  for (const [receipt, receiptPath, binding] of [
+    [fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview],
+    [fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap],
+    [fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap],
+  ]) {
+    receipt.observed_at_utc = "2000-01-01T23:59:00Z";
+    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+  }
+
+  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+});
+
+test("cloud preflight rejects opaque bytes disguised as a PNG", async (t) => {
+  const fixture = await createFixture(t);
+  const opaqueBytes = Buffer.alloc(4096, 0x41);
+  await writeFile(fixture.billingCapturePath, opaqueBytes);
+  fixture.billingPreflightReceipt.redacted_capture_sha256 = sha256(opaqueBytes);
+  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = (
+    await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt)
+  ).digest;
+
+  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+});
+
+test("cloud preflight requires three distinct capture paths and digests", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.agentPlatformSpendCapReceipt.redacted_capture_path = fixture.cloudRunSpendCapReceipt.redacted_capture_path;
+  fixture.agentPlatformSpendCapReceipt.redacted_capture_sha256 = fixture.cloudRunSpendCapReceipt.redacted_capture_sha256;
+  fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap.sha256 = (
+    await writeJson(fixture.agentPlatformSpendCapPath, fixture.agentPlatformSpendCapReceipt)
+  ).digest;
+
+  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+});
+
+test("cloud preflight rejects metadata-only variants of one capture", async (t) => {
+  const fixture = await createFixture(t);
+  const originalPixels = fixturePng(800, 600);
+  const variants = [
+    withPngText(originalPixels, "billing"),
+    withPngText(originalPixels, "cloud-run"),
+    withPngText(originalPixels, "agent-platform"),
+  ];
+  for (const [capturePath, receipt, receiptPath, binding, raw] of [
+    [fixture.billingCapturePath, fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview, variants[0]],
+    [fixture.cloudRunCapturePath, fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap, variants[1]],
+    [fixture.agentPlatformCapturePath, fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap, variants[2]],
+  ]) {
+    await writeFile(capturePath, raw);
+    receipt.redacted_capture_sha256 = sha256(raw);
+    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+  }
+
+  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+});
+
+test("cloud preflight requires an inspectable repository with ignored private artifacts", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.gitState.privateArtifactsSafe = false;
+  let result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("PRIVATE_ARTIFACT_GIT_STATE"), true);
+
+  result = await verifyGoogleCloudPreflight(fixture.record, {
+    repoRoot: fixture.repoRoot,
+    recordPath: fixture.recordPath,
+    nowMilliseconds: fixture.nowMilliseconds,
+  });
+  assert.equal(failureCodes(result).has("GIT_UNAVAILABLE"), true);
+});
+
+test("the checked release template exactly matches the verifier frozen-file contract", async () => {
+  const template = JSON.parse(await readFile(path.join(projectRoot, "docs", "submission-release.template.json"), "utf8"));
+  assert.deepEqual(template.frozen_files.map((binding) => binding.path), requiredFrozenFilePaths);
+  assert.equal(template.google_cloud.project_number, "1061926987746");
+  assert.equal(template.google_cloud.project_created_at_utc, "2026-08-29T22:58:52.064Z");
+  assert.equal(template.google_cloud.evidence_bucket, `${template.google_cloud.project_id}-found-roll-evidence`);
+  assert.deepEqual(Object.keys(template.google_cloud.canonical_revision_images.app), [
+    "project_id",
+    "project_number",
+    "region",
+    "service",
+    "service_resource",
+    "origin",
+    "revision",
+    "revision_resource",
+    "revision_created_at_utc",
+    "image_digest",
+    "image_package",
+    "image_resource",
+  ]);
+  assert.equal(
+    template.google_cloud.canonical_revision_images.app.service_resource,
+    `projects/${template.google_cloud.project_number}/locations/us-central1/services/found-roll-app`,
+  );
+  assert.equal(
+    template.google_cloud.canonical_revision_images.simulator.service_resource,
+    `projects/${template.google_cloud.project_number}/locations/us-central1/services/found-roll-simulator`,
   );
 });
 
@@ -1065,6 +1986,23 @@ test("the frontend manifest must exactly cover the current build tree", async (t
   assert.equal(failureCodes(result).has("FRONTEND_BUILD_DRIFT"), true);
 });
 
+test("frozen files and private evidence reject symbolic-link path components", async (t) => {
+  const fixture = await createFixture(t);
+  const assetsPath = path.join(fixture.repoRoot, "public", "assets");
+  const realAssetsPath = path.join(fixture.repoRoot, "public", "assets-real");
+  await rename(assetsPath, realAssetsPath);
+  await symlink(realAssetsPath, assetsPath, process.platform === "win32" ? "junction" : "dir");
+  const privatePath = path.join(fixture.repoRoot, "artifacts", "private");
+  const realPrivatePath = path.join(fixture.repoRoot, "artifacts", "private-real");
+  await rename(privatePath, realPrivatePath);
+  await symlink(realPrivatePath, privatePath, process.platform === "win32" ? "junction" : "dir");
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  const codes = failureCodes(result);
+  assert.equal(codes.has("FROZEN_FILE_UNREADABLE"), true);
+  assert.equal(codes.has("RECEIPT_UNREADABLE"), true);
+});
+
 test("reserved public origins, insecure remotes, and unsafe private Git artifacts fail closed", async (t) => {
   const fixture = await createFixture(t);
   fixture.record.hosted_project.url = "https://found-roll.example.com";
@@ -1141,6 +2079,210 @@ test("the bound deployment runbook must retain the zero-money retry safeguards",
 
   const result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true);
+
+  const unsafeLeaseDeployment = deployment.replace("ANALYSIS_EXECUTION_LEASE_SECONDS=5", "ANALYSIS_EXECUTION_LEASE_SECONDS=15");
+  assert.notEqual(unsafeLeaseDeployment, deployment);
+  await writeFile(deploymentPath, unsafeLeaseDeployment, "utf8");
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(unsafeLeaseDeployment);
+  const unsafeLeaseResult = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(unsafeLeaseResult).has("DEPLOYMENT_SETUP"), true);
+
+  const nonStandaloneTeardown = deployment.replace(
+    /(## After judging: teardown[\s\S]*?)Set-StrictMode -Version Latest/,
+    "$1# strict mode removed",
+  );
+  assert.notEqual(nonStandaloneTeardown, deployment);
+  await writeFile(deploymentPath, nonStandaloneTeardown, "utf8");
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(nonStandaloneTeardown);
+  const nonStandaloneResult = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(nonStandaloneResult).has("DEPLOYMENT_SETUP"), true);
+  assert.equal(deployment.includes("release-record digest to agree"), false);
+
+  const assertDeploymentRejected = async (mutatedDeployment) => {
+    assert.notEqual(mutatedDeployment, deployment);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const mutationResult = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(mutationResult).has("DEPLOYMENT_SETUP"), true);
+  };
+
+  await assertDeploymentRejected(deployment.replace(
+    "gcloud firestore databases create --project=$ProjectId",
+    "gcloud firestore databases create",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "Assert-LastGcloudSuccess -Operation 'Firestore database creation'",
+    "# Firestore failure check removed",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "function Get-ProjectWideSecretDirectInventory {",
+    "function Get-ProjectWideSecretDirectInventory_REMOVED {",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "Assert-GoogleCloudPreflight -PhaseName \"secret-version-upload-$($Entry.Key)\"",
+    "# fresh upload preflight removed",
+  ));
+  await assertDeploymentRejected(`${deployment}\n\ngcloud storage rm gs://foreign-bucket/object\n`);
+  await assertDeploymentRejected(`${deployment}\n\n\`gcloud storage buckets delete gs://foreign-bucket\`\n`);
+  await assertDeploymentRejected(deployment.replace(
+    "gcloud firestore databases create --project=$ProjectId --location=$FirestoreLocation --type=firestore-native",
+    "gcloud storage rm gs://foreign-bucket/object --project=$ProjectId\nAssert-LastGcloudSuccess -Operation 'forged scoped delete'",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
+    "$ProjectState = gcloud projects describe $ProjectId --format=json; gcloud projects delete $ProjectId --project=$ProjectId --quiet",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
+    "$ProjectState = \"$(gcloud projects delete $ProjectId --project=$ProjectId --quiet)\"",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$AccessTokenLines = @(& gcloud auth print-access-token)",
+    "gcloud auth print-access-token",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "gcloud firestore databases create --project=$ProjectId --location=$FirestoreLocation --type=firestore-native",
+    "gcloud firestore databases create foreign-db --description=--project=$ProjectId\nAssert-LastGcloudSuccess -Operation 'forged embedded project flag'",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$EmbeddedDigestMatch.Groups[1].Value -ne $ResolvedDigest",
+    "$false",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$AuthoritativeSourceBuild[0].source_location_sha256 -ne $SourceDeployBuildSourceLocationSha256",
+    "$false",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "gcloud builds list --project=$ProjectId --region=$BuildLocation --limit=unlimited",
+    "gcloud builds list --project=$ProjectId --limit=unlimited",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$PostDeleteProject.lifecycleState -ne 'DELETE_REQUESTED'",
+    "$PostDeleteProject.lifecycleState -ne 'ACTIVE'",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$DescribeOutput -notmatch $RecognizedNotFoundPattern",
+    "$false",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "process { [void]$JsonLines.Add($Json) }",
+    "process { $JsonLines.Add($Json) }",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "-DateKind String -ErrorAction Stop",
+    "-ErrorAction Stop",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
+    "$ProjectStateJson = gcloud projects describe $ProjectId --format=json\n$ProjectState = ConvertFrom-Json -InputObject $ProjectStateJson",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
+    "$ProjectStateJson = gcloud projects describe $ProjectId --format=json\n$ProjectState = Microsoft.PowerShell.Utility\\ConvertFrom-Json -InputObject $ProjectStateJson",
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
+    "$ProjectStateJson = gcloud projects describe $ProjectId --format=json\n$ProjectState = convertfrom-json -InputObject $ProjectStateJson",
+  ));
+});
+
+test("extracted PowerShell guards execute fail-closed under StrictMode", async (t) => {
+  const deployment = await readFile(path.join(projectRoot, "docs", "deployment.md"), "utf8");
+  const sliceBetween = (startMarker, endMarker) => {
+    const start = deployment.indexOf(startMarker);
+    const end = deployment.indexOf(endMarker, start);
+    assert.notEqual(start, -1, `missing ${startMarker}`);
+    assert.notEqual(end, -1, `missing ${endMarker}`);
+    return deployment.slice(start, end);
+  };
+  const inputGuard = sliceBetween("function Assert-AllSecretInputValues {", "\n\nfunction Test-ExactSecretFileBytes");
+  const byteGuard = sliceBetween("function Test-ExactSecretFileBytes {", "\n\nfunction Remove-ProtectedSecretTempFile");
+  const setGuard = sliceBetween(
+    "    if ($LiveSecretIds.Count -ne $ExpectedSecretIds.Count -or @(Compare-Object $LiveSecretIds $ExpectedSecretIds).Count -ne 0) {",
+    "\n    foreach ($SecretName in $SecretBootstrapNames)",
+  );
+  const locationGuard = sliceBetween(
+    "            $LocationsProperty = $LocationsPage.PSObject.Properties['locations']",
+    "\n        } while (-not [string]::IsNullOrWhiteSpace($PageToken))",
+  );
+  const jsonGuard = sliceBetween(
+    "if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion -lt [version]'7.5') {",
+    "\n$ResourceIdentityPath = Join-Path $PWD \"docs/google-cloud-resource-identity.json\"",
+  );
+  const teardownGuard = sliceBetween("$PostDeleteState = $null", "\n$TeardownReceipt = [ordered]@{");
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-ps-guards-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const scriptPath = path.join(temporaryRoot, "guards.ps1");
+  const script = `Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+${jsonGuard}
+${inputGuard}
+${byteGuard}
+$SecretBootstrapNames = @('a','b','c','d','e','f','g','h')
+$SecretValues = [ordered]@{}
+foreach ($Name in $SecretBootstrapNames) { $SecretValues[$Name] = "valid-secret-value-$Name-1234567890" }
+Assert-AllSecretInputValues
+$SecretValues['h'] = $SecretValues['a']
+try { Assert-AllSecretInputValues; throw 'duplicate secret was accepted' } catch { if ($_.Exception.Message -eq 'duplicate secret was accepted') { throw } }
+$SecretValues['h'] = 'weak'
+try { Assert-AllSecretInputValues; throw 'weak secret was accepted' } catch { if ($_.Exception.Message -eq 'weak secret was accepted') { throw } }
+$BytePath = Join-Path $PSScriptRoot 'secret.bin'
+[System.IO.File]::WriteAllBytes($BytePath, [Text.UTF8Encoding]::new($false).GetBytes('exact-secret-value-1234567890'))
+if (-not (Test-ExactSecretFileBytes -Path $BytePath -ExpectedValue 'exact-secret-value-1234567890')) { throw 'exact bytes rejected' }
+if (Test-ExactSecretFileBytes -Path $BytePath -ExpectedValue 'wrong-secret-value-1234567890') { throw 'wrong bytes accepted' }
+$LiveSecretIds = @('a','b'); $ExpectedSecretIds = @('a','b')
+${setGuard}
+$ExpectedSecretIds = @('a','c')
+try { ${setGuard}; throw 'changed secret set accepted' } catch { if ($_.Exception.Message -eq 'changed secret set accepted') { throw } }
+$ProjectId = 'found-roll-agentic-20260830'; $ProjectNumber = '1061926987746'; $Locations = @('global'); $LocationsPage = [pscustomobject]@{ locations = @() }
+${locationGuard}
+if ($PageToken -ne '') { throw 'missing final nextPageToken was not normalized to empty' }
+function Invoke-PostDeleteDecision {
+    param([int]$InputExitCode, [string]$InputOutput)
+    $ExpectedProjectId = 'found-roll-agentic-20260830'
+    $ExpectedProjectNumber = '1061926987746'
+    $ExpectedProjectCreatedAt = '2026-08-29T22:58:52.064Z'
+    $ExpectedLabelKey = 'found-roll-purpose'
+    $ExpectedLabelValue = 'dedicated-hackathon-demo'
+    $DescribeExitCode = $InputExitCode
+    $DescribeOutput = $InputOutput
+    ${teardownGuard}
+    return "$PostDeleteState|$PostDeleteNotFoundConfirmed"
+}
+$DeleteRequestedObject = [ordered]@{ projectId='found-roll-agentic-20260830'; projectNumber='1061926987746'; createTime='2026-08-29T22:58:52.064Z'; lifecycleState='DELETE_REQUESTED'; labels=@{ 'found-roll-purpose'='dedicated-hackathon-demo' } }
+$DeleteRequested = $DeleteRequestedObject | ConvertTo-Json -Compress
+$DeleteRequestedMultiline = $DeleteRequestedObject | ConvertTo-Json -Depth 5
+$ParsedCompressed = $DeleteRequested | ConvertFrom-JsonPreservingStrings
+$ParsedMultiline = $DeleteRequestedMultiline | ConvertFrom-JsonPreservingStrings
+if ($ParsedCompressed.createTime -isnot [string] -or $ParsedCompressed.createTime -cne '2026-08-29T22:58:52.064Z') { throw 'compressed timestamp string was not preserved' }
+if ($ParsedMultiline.createTime -isnot [string] -or $ParsedMultiline.createTime -cne '2026-08-29T22:58:52.064Z') { throw 'multiline timestamp string was not preserved' }
+if ((Invoke-PostDeleteDecision 0 $DeleteRequested) -ne 'DELETE_REQUESTED|False') { throw 'exact DELETE_REQUESTED rejected' }
+if ((Invoke-PostDeleteDecision 0 $DeleteRequestedMultiline) -ne 'DELETE_REQUESTED|False') { throw 'exact multiline DELETE_REQUESTED rejected' }
+if ((Invoke-PostDeleteDecision 1 'ERROR: (gcloud.projects.describe) [found-roll-agentic-20260830] not found.') -ne 'NOT_FOUND|True') { throw 'exact NOT_FOUND rejected' }
+$InvalidCases = @(
+    @{ Exit=0; Output='' },
+    @{ Exit=1; Output='ERROR: permission denied' },
+    @{ Exit=0; Output='not-json' },
+    @{ Exit=0; Output=($DeleteRequested -replace 'DELETE_REQUESTED','ACTIVE') },
+    @{ Exit=0; Output=($DeleteRequested -replace 'found-roll-agentic-20260830','other-project-12345') },
+    @{ Exit=0; Output=($DeleteRequested -replace '22:58:52.064Z','22:58:52.065Z') }
+)
+foreach ($Case in $InvalidCases) {
+    $Rejected = $false
+    try { [void](Invoke-PostDeleteDecision $Case.Exit $Case.Output) } catch { $Rejected = $true }
+    if (-not $Rejected) { throw 'invalid post-delete result was accepted' }
+}
+'POWERSHELL_GUARDS_PASS'
+`;
+  await writeFile(scriptPath, script, "utf8");
+  const powershell = "pwsh";
+  const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /POWERSHELL_GUARDS_PASS/);
 });
 
 test("local privacy receipts must bind the current canary manifest", async (t) => {
@@ -1223,12 +2365,23 @@ test("all private receipt templates parse and remain explicitly blocked", async 
     ["canonical-privacy.template.json", "found-roll-canonical-privacy"],
     ["clean-browser.template.json", "found-roll-clean-browser"],
     ["chain-audit.template.json", "found-roll-chain-audit"],
+    ["google-cloud-billing-preflight.template.json", "found-roll-google-cloud-billing-preflight"],
+    ["google-cloud-spend-cap.template.json", "found-roll-google-cloud-spend-cap-preflight"],
+    ["google-cloud-project-storage-audit.template.json", "found-roll-google-cloud-project-storage-audit"],
   ];
   for (const [filename, kind] of templates) {
     const template = JSON.parse(await readFile(path.join(projectRoot, "docs", filename), "utf8"));
     assert.equal(template.kind, kind);
     assert.equal(template.status, "BLOCKED");
   }
+  const storageTemplate = JSON.parse(
+    await readFile(path.join(projectRoot, "docs", "google-cloud-project-storage-audit.template.json"), "utf8"),
+  );
+  assert.equal(Array.isArray(storageTemplate.buckets), true);
+  assert.equal(Array.isArray(storageTemplate.buckets[0].current_objects), true);
+  assert.equal(Array.isArray(storageTemplate.buckets[0].all_version_objects), true);
+  assert.equal(Array.isArray(storageTemplate.buckets[0].soft_deleted_objects), true);
+  assert.equal("all_version_object_inventory_sha256" in storageTemplate.buckets[0], true);
 });
 
 function git(repoRoot, args) {
@@ -1236,6 +2389,20 @@ function git(repoRoot, args) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
+
+test("the CLI direct-invocation guard resolves a symlinked scripts directory", async (t) => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-cli-link-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const scriptsLink = path.join(temporaryRoot, "scripts-link");
+  await symlink(path.dirname(verifierPath), scriptsLink, process.platform === "win32" ? "junction" : "dir");
+  const cli = spawnSync(process.execPath, [path.join(scriptsLink, path.basename(verifierPath)), "--help"], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.match(cli.stdout, /^Usage: node scripts\/verify-submission-readiness\.mjs/m);
+});
 
 test("the CLI binds HEAD, local tag, configured remote, and a clean worktree", async (t) => {
   const fixture = await createFixture(t);
@@ -1281,6 +2448,44 @@ test("the CLI binds HEAD, local tag, configured remote, and a clean worktree", a
   assert.equal(cli.status, 0, cli.stderr);
   assert.match(cli.stdout, /SUBMISSION READINESS: PASS/);
 
+  let preflightCli = spawnSync(process.execPath, [
+    verifierPath,
+    "--repo-root",
+    fixture.repoRoot,
+    "--record",
+    fixture.recordPath,
+    "--preflight-only",
+  ], { encoding: "utf8", shell: false, windowsHide: true });
+  assert.equal(preflightCli.status, 0, preflightCli.stderr);
+  assert.match(preflightCli.stdout, /GOOGLE CLOUD PREFLIGHT: PASS/);
+
+  const teardownCli = spawnSync(process.execPath, [
+    verifierPath,
+    "--repo-root",
+    fixture.repoRoot,
+    "--record",
+    fixture.recordPath,
+    "--teardown-identity-only",
+  ], { encoding: "utf8", shell: false, windowsHide: true });
+  assert.equal(teardownCli.status, 0, teardownCli.stderr);
+  assert.match(teardownCli.stdout, /GOOGLE CLOUD TEARDOWN IDENTITY: PASS/);
+
+  await writeFile(
+    path.join(fixture.repoRoot, ".gitignore"),
+    "artifacts/private/*\n!artifacts/private/billing-overview-redacted.png\n",
+    "utf8",
+  );
+  preflightCli = spawnSync(process.execPath, [
+    verifierPath,
+    "--repo-root",
+    fixture.repoRoot,
+    "--record",
+    fixture.recordPath,
+    "--preflight-only",
+  ], { encoding: "utf8", shell: false, windowsHide: true });
+  assert.equal(preflightCli.status, 1);
+  assert.match(preflightCli.stderr, /PRIVATE_ARTIFACT_GIT_STATE/);
+
   git(fixture.repoRoot, ["add", "-f", "artifacts/private/canonical-run-1.json"]);
   await appendFile(path.join(fixture.repoRoot, "README.md"), "dirty\n", "utf8");
   cli = spawnSync(process.execPath, [
@@ -1293,4 +2498,15 @@ test("the CLI binds HEAD, local tag, configured remote, and a clean worktree", a
   assert.equal(cli.status, 1);
   assert.match(cli.stderr, /WORKTREE_DIRTY/);
   assert.match(cli.stderr, /PRIVATE_ARTIFACT_GIT_STATE/);
+
+  preflightCli = spawnSync(process.execPath, [
+    verifierPath,
+    "--repo-root",
+    fixture.repoRoot,
+    "--record",
+    fixture.recordPath,
+    "--preflight-only",
+  ], { encoding: "utf8", shell: false, windowsHide: true });
+  assert.equal(preflightCli.status, 1);
+  assert.match(preflightCli.stderr, /PRIVATE_ARTIFACT_GIT_STATE/);
 });

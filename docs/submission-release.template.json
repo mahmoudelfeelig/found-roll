@@ -18,7 +18,12 @@
   },
   "google_cloud": {
     "project_id": "found-roll-agentic-20260830",
+    "project_number": "1061926987746",
+    "project_created_at_utc": "2026-08-29T22:58:52.064Z",
+    "evidence_bucket": "found-roll-agentic-20260830-found-roll-evidence",
     "dedicated_project_confirmed": true,
+    "dedicated_project_label_key": "found-roll-purpose",
+    "dedicated_project_label_value": "dedicated-hackathon-demo",
     "billing_enabled_confirmed": false,
     "billing_account_type": "unverified",
     "free_trial_remaining_credit_confirmed": false,
@@ -28,7 +33,65 @@
     "agent_platform_spend_cap_confirmed": false,
     "required_apis_enabled_confirmed": false,
     "iam_ready_confirmed": false,
-    "quota_ready_confirmed": false
+    "quota_ready_confirmed": false,
+    "resource_identity": {
+      "path": "docs/google-cloud-resource-identity.json",
+      "sha256": "<google-cloud-resource-identity-sha256>"
+    },
+    "canonical_revision_images": {
+      "app": {
+        "project_id": "found-roll-agentic-20260830",
+        "project_number": "1061926987746",
+        "region": "us-central1",
+        "service": "found-roll-app",
+        "service_resource": "projects/1061926987746/locations/us-central1/services/found-roll-app",
+        "origin": "https://replace-app-origin.example.invalid",
+        "revision": "<exact-canonical-app-revision>",
+        "revision_resource": "projects/1061926987746/locations/us-central1/services/found-roll-app/revisions/<exact-canonical-app-revision>",
+        "revision_created_at_utc": "<canonical-app-revision-created-at-utc>",
+        "image_digest": "<sha256-canonical-app-image-digest>",
+        "image_package": "<exact-canonical-app-artifact-registry-package>",
+        "image_resource": "<exact-canonical-app-package-at-digest>"
+      },
+      "simulator": {
+        "project_id": "found-roll-agentic-20260830",
+        "project_number": "1061926987746",
+        "region": "us-central1",
+        "service": "found-roll-simulator",
+        "service_resource": "projects/1061926987746/locations/us-central1/services/found-roll-simulator",
+        "origin": "https://replace-simulator-origin.example.invalid",
+        "revision": "<exact-canonical-simulator-revision>",
+        "revision_resource": "projects/1061926987746/locations/us-central1/services/found-roll-simulator/revisions/<exact-canonical-simulator-revision>",
+        "revision_created_at_utc": "<canonical-simulator-revision-created-at-utc>",
+        "image_digest": "<sha256-canonical-simulator-image-digest>",
+        "image_package": "<exact-canonical-simulator-artifact-registry-package>",
+        "image_resource": "<exact-canonical-simulator-package-at-digest>"
+      }
+    },
+    "project_storage_receipts": {
+      "after_app_source_deploy": {
+        "path": "artifacts/private/storage-after-app-source-deploy.json",
+        "sha256": "<storage-after-app-source-deploy-sha256>"
+      },
+      "after_simulator_source_deploy": {
+        "path": "artifacts/private/storage-after-simulator-source-deploy.json",
+        "sha256": "<storage-after-simulator-source-deploy-sha256>"
+      }
+    },
+    "preflight_receipts": {
+      "billing_overview": {
+        "path": "artifacts/private/billing-overview-receipt.json",
+        "sha256": "<billing-overview-receipt-sha256>"
+      },
+      "cloud_run_spend_cap": {
+        "path": "artifacts/private/cloud-run-spend-cap-receipt.json",
+        "sha256": "<cloud-run-spend-cap-receipt-sha256>"
+      },
+      "agent_platform_spend_cap": {
+        "path": "artifacts/private/agent-platform-spend-cap-receipt.json",
+        "sha256": "<agent-platform-spend-cap-receipt-sha256>"
+      }
+    }
   },
   "hosted_project": {
     "url": "https://replace.example.invalid",
@@ -142,6 +205,7 @@
     { "path": "public/assets/pouch-rear.jpg", "sha256": "<pouch-rear-asset-sha256>" },
     { "path": "public/assets/pouch-serial-detail.jpg", "sha256": "<pouch-serial-detail-asset-sha256>" },
     { "path": "evaluation/fixtures.json", "sha256": "<evaluation-fixtures-sha256>" },
+    { "path": "evaluation/privacy-canaries.json", "sha256": "<privacy-canaries-sha256>" },
     { "path": "evaluation/results.json", "sha256": "<evaluation-results-sha256>" },
     { "path": "evaluation/privacy-scan-results.json", "sha256": "<publication-privacy-sha256>" },
     { "path": "evaluation/privacy-scan-docs-results.json", "sha256": "<docs-privacy-sha256>" },
@@ -150,10 +214,12 @@
     { "path": "artifacts/verification/service-client-http-smoke-receipt.json", "sha256": "<local-http-receipt-sha256>" },
     { "path": "artifacts/verification/frontend-build-manifest.json", "sha256": "<frontend-build-manifest-sha256>" },
     { "path": "scripts/prepare-canonical-run.ps1", "sha256": "<preparation-script-sha256>" },
+    { "path": "scripts/verify-submission-readiness.mjs", "sha256": "<submission-verifier-sha256>" },
     { "path": "docs/architecture.md", "sha256": "<architecture-document-sha256>" },
     { "path": "docs/architecture-diagram.manifest.json", "sha256": "<architecture-manifest-sha256>" },
     { "path": "docs/architecture-diagram.mmd", "sha256": "<architecture-source-sha256>" },
     { "path": "docs/architecture-diagram.png", "sha256": "<architecture-render-sha256>" },
+    { "path": "docs/google-cloud-resource-identity.json", "sha256": "<google-cloud-resource-identity-sha256>" },
     { "path": "docs/deployment.md", "sha256": "<deployment-runbook-sha256>" },
     { "path": "docs/devpost-submission.md", "sha256": "<devpost-copy-sha256>" },
     { "path": "docs/demo-script.md", "sha256": "<demo-script-sha256>" }

@@ -3,6 +3,7 @@
     {
       "id": "fixture-private-answer",
       "length": 4,
+      "matching": "structured_values",
       "normalization": "exact UTF-8 text",
       "sha256": "0ba896169af5b24dcc877d78f0c3feaf9c9c7f0ca2ef6248f19de437dfc2b003",
       "source": "synthetic fixture"
@@ -10,6 +11,7 @@
     {
       "id": "fr-009-private-answer",
       "length": 4,
+      "matching": "structured_values",
       "normalization": "exact UTF-8 text",
       "sha256": "2ac5b691fa275be817b9c8cd1a90d23383ca77c1b20fa4058caf3de6260425d2",
       "source": "synthetic route-conflict fixture"
@@ -17,34 +19,39 @@
     {
       "id": "fr001-claimant-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "e4f99858e8c2fa994135863aa18086bc90133c11ec76c2863c7ce0014c07ffe2",
+      "sha256": "2587f233b22448e64254ecc39aea79d743e3e20a9693c37fedb9d77e54a2c223",
       "source": "fr001"
     },
     {
       "id": "fr001-custodian-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "5c7014a7d9558b193d54358b07a2e6d2067476bde251dd494348b4cea2745fa7",
+      "sha256": "4dd7b74db96773fcdf851952b5c579b9db37610c35fd6078d24e8170638244ff",
       "source": "fr001"
     },
     {
       "id": "fr014-claimant-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "918cfae0b7d9b6830a57ef39a250bd27562d5884dbe6404069061b51bc520d2f",
+      "sha256": "dfeac6b238ff9e3df6713703d690fe500ccb738fde83e15f0eb1f16e23e8eb88",
       "source": "fr014"
     },
     {
       "id": "fr014-custodian-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "b3da3bad2d6770adc4a46d1f288edad82dd624ec651764377797735d2b77034d",
+      "sha256": "b7ccef30179f3a56083e3caa3e69b6fd80aeb0a8fd7459f8eac408848296a7ee",
       "source": "fr014"
     },
     {
       "id": "fr014-expired-claim-link",
       "length": 69,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
       "sha256": "20c93abaaa51cf1c831e49aac9bdcd71ca1834013e64e524a869100ad56f9194",
       "source": "fr014"
@@ -52,19 +59,21 @@
     {
       "id": "fr015-claimant-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "54d96b7a5712031d6e384e3a8fbedb332ad20ad7bdb53003255aa570251964a5",
+      "sha256": "eb2813480a765a8d9e9bbd10d24b04f2ccaf22c24e9abb921535ee773ebb00b1",
       "source": "fr015"
     },
     {
       "id": "fr015-custodian-token",
       "length": 32,
+      "matching": "exact_window",
       "normalization": "exact UTF-8 text",
-      "sha256": "cbebb2eb9dc8319338630564d2f06aff577e056b2b1221d41007f283f63cbd6a",
+      "sha256": "26c374834fba169c3e74922e98a7ba0e14f1a952ab9fcb296ea11cf539f22e45",
       "source": "fr015"
     }
   ],
-  "disclosure": "Digest-only synthetic canaries. Raw values are never stored or printed by evaluation tooling.",
+  "disclosure": "Digest-only synthetic canaries. Raw values are never stored or printed by evaluation tooling. Short numeric answers use field-aware structured-value matching for semantic text, opaque metadata, numeric scalars, and URI/reference fields.",
   "patterns": [
     {
       "id": "embedded-demo-credential-uri",

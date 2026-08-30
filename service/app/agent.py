@@ -225,7 +225,11 @@ class VertexAdkCaseAnalyst:
             name="found_roll_case_analyst",
             model=model,
             generate_content_config=types.GenerateContentConfig(max_output_tokens=2048),
-            mode="single_turn",
+            # Runner accepts only chat/task modes for a root LlmAgent. Every
+            # analysis already gets a fresh one-request session, so chat keeps
+            # the intended one-shot boundary without task-mode finish_task
+            # output semantics.
+            mode="chat",
             include_contents="none",
             instruction=CASE_ANALYST_INSTRUCTION,
             tools=[
@@ -262,6 +266,7 @@ class VertexAdkCaseAnalyst:
         self, case: CaseRecord, candidates: list[Candidate]
     ) -> tuple[str, AnalysisProposal]:
         try:
+            from google.adk.agents.invocation_context import LlmCallsLimitExceededError
             from google.adk.agents.run_config import RunConfig
             from google.adk.runners import Runner
             from google.adk.sessions import InMemorySessionService
@@ -278,27 +283,38 @@ class VertexAdkCaseAnalyst:
         app_name = "found_roll_case_analyst"
         user_id = f"case:{case.id}"
         session_id = run_id
-        session_service = InMemorySessionService()
-        await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
-        runner = Runner(
-            agent=self._build_agent(ranked_candidates),
-            app_name=app_name,
-            session_service=session_service,
-        )
         final_text = ""
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session_id,
-            new_message=Content(
-                role="user",
-                parts=self._request_parts(case, ranked_candidates, Part),
-            ),
-            run_config=RunConfig(max_llm_calls=self.max_llm_calls),
-        ):
-            if event.is_final_response() and event.content:
-                final_text = "".join(
-                    part.text or "" for part in event.content.parts if getattr(part, "text", None)
-                )
+        try:
+            session_service = InMemorySessionService()
+            await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
+            runner = Runner(
+                agent=self._build_agent(ranked_candidates),
+                app_name=app_name,
+                session_service=session_service,
+            )
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=Content(
+                    role="user",
+                    parts=self._request_parts(case, ranked_candidates, Part),
+                ),
+                run_config=RunConfig(max_llm_calls=self.max_llm_calls),
+            ):
+                if event.is_final_response() and event.content:
+                    final_text = "".join(
+                        part.text or "" for part in event.content.parts if getattr(part, "text", None)
+                    )
+        except LlmCallsLimitExceededError as exc:
+            raise Unavailable(
+                "adk_llm_call_limit_exceeded",
+                "The live Case Analyst reached its bounded LLM-call ceiling and stopped for manual review.",
+            ) from exc
+        except Exception as exc:
+            raise Unavailable(
+                "adk_runtime_unavailable",
+                "The live Case Analyst runtime failed safely and stopped for manual review.",
+            ) from exc
         if not final_text:
             raise Unavailable("adk_empty_response", "The live Case Analyst returned no final proposal.")
         try:

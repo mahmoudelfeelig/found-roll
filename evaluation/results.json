@@ -11,7 +11,7 @@
   },
   "failed_count": 0,
   "fixture_count": 15,
-  "generated_at": "2026-08-29T23:59:04.637632+00:00",
+  "generated_at": "2026-08-30T08:25:13.932067+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",
@@ -193,7 +193,7 @@
           "live_trajectory_observed": false,
           "max_llm_calls_cap": 8,
           "max_output_tokens_cap": 2048,
-          "mode": "single_turn",
+          "mode": "chat",
           "model": "gemini-3.5-flash",
           "network_calls": 0,
           "output_schema": "AnalysisProposal",

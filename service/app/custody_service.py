@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import secrets
 from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
@@ -19,6 +20,7 @@ from .domain import (
     CustodyState,
     EvidenceOrigin,
     EvidenceVisibility,
+    ExecutionClaimDisposition,
     EventManifest,
     HandoffRecord,
     HandoffStatus,
@@ -43,6 +45,12 @@ from .outbox import TaskPublisher, make_outbox, opaque_payload
 from .policy import POLICY_VERSION, category_requires_specialist, evaluate_release_policy, specialist_intake_guidance
 from .relay import RelayGateway
 from .repository import MutationSpec, Repository
+
+
+# Keep the claim shorter than the production queue's 10-second minimum
+# backoff. A transport-ambiguous redelivery can then take the stale-recovery
+# branch while the replaced worker remains unable to commit model output.
+ANALYSIS_EXECUTION_LEASE = timedelta(seconds=5)
 
 
 class CustodyService:
@@ -311,6 +319,8 @@ class CustodyService:
         key: str,
         fingerprint_data,
         updates: dict | None = None,
+        execution_claim_outbox_id: str | None = None,
+        execution_claim_token: str | None = None,
         **kwargs,
     ) -> AppliedMutation:
         return self.repository.apply_mutation(
@@ -324,7 +334,9 @@ class CustodyService:
                 fingerprint_data=fingerprint_data,
                 updates=updates,
                 **kwargs,
-            )
+            ),
+            execution_claim_outbox_id=execution_claim_outbox_id,
+            execution_claim_token=execution_claim_token,
         )
 
     def _analysis_evidence_refs(self, case_id: str) -> list[str]:
@@ -496,49 +508,162 @@ class CustodyService:
         if outbox.status == OutboxStatus.PENDING:
             self.repository.mark_outbox(outbox.id, OutboxStatus.DISPATCHED)
         if outbox.kind == OutboxKind.ANALYZE_CASE:
-            result = self._process_analysis(outbox)
+            claimed_at = self.clock()
+            claim_token = secrets.token_urlsafe(32)
+            claim = self.repository.claim_outbox_execution(
+                outbox.id,
+                claim_token=claim_token,
+                claimed_at=claimed_at,
+                lease_expires_at=claimed_at + ANALYSIS_EXECUTION_LEASE,
+            )
+            if claim.disposition == ExecutionClaimDisposition.IN_PROGRESS:
+                raise Unavailable(
+                    "analysis_execution_in_progress",
+                    "Another analyst execution owns the active lease; this delivery may be retried.",
+                )
+            if claim.disposition == ExecutionClaimDisposition.STALE_RECOVERY:
+                case = self.repository.get_case(outbox.case_id)
+                recovered = self._recover_analysis_failure(case, outbox, claim_token)
+                if recovered is not None:
+                    return recovered
+                if case.state == CustodyState.ANALYZING:
+                    ambiguous = Unavailable(
+                        "analysis_execution_ambiguous",
+                        "An earlier analyst execution became ambiguous; no second model call was made.",
+                    )
+                    self._terminalize_analysis_failure(
+                        case,
+                        outbox,
+                        ambiguous,
+                        claim_token,
+                        reason=(
+                            "An earlier analyst execution became ambiguous; custody work stopped for "
+                            "manual review without a second model call."
+                        ),
+                    )
+                    raise ambiguous
+            result = self._process_analysis(outbox, claim_token)
         elif outbox.kind in {OutboxKind.RESERVE_RELAY, OutboxKind.RELEASE_RELAY}:
             result = self._process_relay(outbox)
         else:  # pragma: no cover - exhaustive enum guard
             raise Conflict("unsupported_outbox_kind", "The outbox command kind is unsupported.")
         return result
 
-    def _process_analysis(self, outbox) -> dict:
+    @staticmethod
+    def _analysis_failure_code(event_type: str) -> str | None:
+        return {
+            "ANALYST_UNAVAILABLE": "analyst_unavailable",
+            "ANALYST_REVIEW_REQUIRED": "analyst_policy_conflict",
+        }.get(event_type)
+
+    def _recover_analysis_failure(
+        self,
+        case: CaseRecord,
+        outbox,
+        claim_token: str,
+    ) -> dict | None:
+        if case.state != CustodyState.MANUAL_REVIEW:
+            return None
+        recovery_key = f"outbox:{outbox.id}:manual-review"
+        failure_event = next(
+            (
+                event
+                for event in reversed(self.repository.list_events(case.id))
+                if event.idempotency_key == recovery_key
+                and event.task_id == outbox.task_name
+                and event.from_state == CustodyState.ANALYZING
+                and event.to_state == CustodyState.MANUAL_REVIEW
+                and self._analysis_failure_code(event.type) is not None
+            ),
+            None,
+        )
+        if failure_event is None:
+            return None
+        failed = self.repository.mark_outbox_execution(
+            outbox.id,
+            OutboxStatus.FAILED,
+            claim_token=claim_token,
+            completed_at=self.clock(),
+            failure_stage=OutboxFailureStage.EXECUTE,
+            failure_code=self._analysis_failure_code(failure_event.type),
+        )
+        return {
+            "outbox": failed,
+            "case": CaseView.from_record(case),
+            "replayed": False,
+            "terminal_failure_acknowledged": True,
+            "retryable": False,
+            "manual_action_required": True,
+        }
+
+    def _terminalize_analysis_failure(
+        self,
+        case: CaseRecord,
+        outbox,
+        exc: DomainError,
+        claim_token: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        unavailable = isinstance(exc, Unavailable)
+        event_type = "ANALYST_UNAVAILABLE" if unavailable else "ANALYST_REVIEW_REQUIRED"
+        failure_code = "analyst_unavailable" if unavailable else "analyst_policy_conflict"
+        failure_reason = reason or (
+            "The bounded analyst was unavailable; custody work stopped for manual review."
+            if unavailable
+            else (
+                "The analysis workflow could not produce an acceptable custody proposal; "
+                "custody work stopped for manual review."
+            )
+        )
+        self._mutation(
+            case=case,
+            target=CustodyState.MANUAL_REVIEW,
+            event_type=event_type,
+            actor="service:workflow",
+            reason=failure_reason,
+            key=f"outbox:{outbox.id}:manual-review",
+            fingerprint_data={"outbox_id": outbox.id, "reason": failure_code},
+            task_id=outbox.task_name,
+            execution_claim_outbox_id=outbox.id,
+            execution_claim_token=claim_token,
+        )
+        self.repository.mark_outbox_execution(
+            outbox.id,
+            OutboxStatus.FAILED,
+            claim_token=claim_token,
+            completed_at=self.clock(),
+            failure_stage=OutboxFailureStage.EXECUTE,
+            failure_code=failure_code,
+        )
+
+    def _process_analysis(self, outbox, claim_token: str) -> dict:
         case = self.repository.get_case(outbox.case_id)
+        recovered = self._recover_analysis_failure(case, outbox, claim_token)
+        if recovered is not None:
+            return recovered
         if case.state == CustodyState.ANALYZING:
             candidates = self.repository.list_candidates()
             try:
                 run_id, proposal = self.analyst.analyze(case, candidates)
-            except Unavailable:
-                self._mutation(
-                    case=case,
-                    target=CustodyState.MANUAL_REVIEW,
-                    event_type="ANALYST_UNAVAILABLE",
-                    actor="service:workflow",
-                    reason="The bounded analyst was unavailable; custody work stopped for manual review.",
-                    key=f"outbox:{outbox.id}:manual-review",
-                    fingerprint_data={"outbox_id": outbox.id, "reason": "analyst_unavailable"},
-                    task_id=outbox.task_name,
+                authorized_ids = {candidate.id for candidate in candidates}
+                if set(proposal.ranked_candidate_ids) - authorized_ids:
+                    raise Conflict("agent_scope_violation", "The analyst referenced an unauthorized candidate.")
+                selected = (
+                    self.repository.get_candidate(proposal.selected_candidate_id)
+                    if proposal.selected_candidate_id
+                    else None
                 )
-                self.repository.mark_outbox(
-                    outbox.id,
-                    OutboxStatus.FAILED,
-                    completed_at=self.clock(),
-                    failure_stage=OutboxFailureStage.EXECUTE,
-                    failure_code="analyst_unavailable",
-                )
+                if not selected:
+                    raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
+                if proposal.restricted_attribute_id != selected.restricted_attribute_id:
+                    raise Conflict(
+                        "agent_discriminator_invalid",
+                        "The analyst proposed an attribute that is not available as restricted staff evidence.",
+                    )
+            except (Unavailable, Conflict) as exc:
+                self._terminalize_analysis_failure(case, outbox, exc, claim_token)
                 raise
-            authorized_ids = {candidate.id for candidate in candidates}
-            if set(proposal.ranked_candidate_ids) - authorized_ids:
-                raise Conflict("agent_scope_violation", "The analyst referenced an unauthorized candidate.")
-            selected = self.repository.get_candidate(proposal.selected_candidate_id) if proposal.selected_candidate_id else None
-            if not selected:
-                raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
-            if proposal.restricted_attribute_id != selected.restricted_attribute_id:
-                raise Conflict(
-                    "agent_discriminator_invalid",
-                    "The analyst proposed an attribute that is not available as restricted staff evidence.",
-                )
             self._mutation(
                 case=case,
                 target=CustodyState.CANDIDATES_READY,
@@ -561,6 +686,8 @@ class CustodyService:
                 task_id=outbox.task_name,
                 model_run_id=run_id,
                 evidence_refs=[f"candidate://{item_id}" for item_id in proposal.ranked_candidate_ids],
+                execution_claim_outbox_id=outbox.id,
+                execution_claim_token=claim_token,
             )
             case = self.repository.get_case(outbox.case_id)
         if case.state == CustodyState.CANDIDATES_READY:
@@ -577,11 +704,18 @@ class CustodyService:
                 tool="propose_discriminator",
                 task_id=outbox.task_name,
                 model_run_id=case.model_run_id,
+                execution_claim_outbox_id=outbox.id,
+                execution_claim_token=claim_token,
             )
             case = self.repository.get_case(outbox.case_id)
         if case.state != CustodyState.CLARIFICATION_REQUIRED:
             raise Conflict("analysis_result_state_invalid", f"Analysis cannot complete in {case.state.value}.")
-        completed = self.repository.mark_outbox(outbox.id, OutboxStatus.COMPLETE, completed_at=self.clock())
+        completed = self.repository.mark_outbox_execution(
+            outbox.id,
+            OutboxStatus.COMPLETE,
+            claim_token=claim_token,
+            completed_at=self.clock(),
+        )
         return {"outbox": completed, "case": CaseView.from_record(case), "replayed": False}
 
     def submit_claim_evidence(

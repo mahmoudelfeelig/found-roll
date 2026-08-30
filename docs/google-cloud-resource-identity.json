@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "kind": "found-roll-google-cloud-resource-identity",
+  "project_id": "found-roll-agentic-20260830",
+  "project_number": "1061926987746",
+  "project_created_at_utc": "2026-08-29T22:58:52.064Z",
+  "evidence_bucket": "found-roll-agentic-20260830-found-roll-evidence",
+  "dedicated_project_label_key": "found-roll-purpose",
+  "dedicated_project_label_value": "dedicated-hackathon-demo"
+}

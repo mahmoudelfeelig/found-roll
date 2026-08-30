@@ -68,6 +68,12 @@ class OutboxFailureStage(StrEnum):
     EXECUTE = "EXECUTE"
 
 
+class ExecutionClaimDisposition(StrEnum):
+    ACQUIRED = "ACQUIRED"
+    IN_PROGRESS = "IN_PROGRESS"
+    STALE_RECOVERY = "STALE_RECOVERY"
+
+
 class HandoffStatus(StrEnum):
     PENDING = "PENDING"
     HELD = "HELD"
@@ -233,6 +239,36 @@ class OutboxRecord(BaseModel):
     replay_count: int = Field(default=0, ge=0)
     last_replayed_at: datetime | None = None
     last_replay_task_name: str | None = Field(default=None, max_length=1024)
+
+
+class OutboxExecutionClaim(BaseModel):
+    """Internal single-flight lease for one outbox execution.
+
+    The raw winner token is never persisted. A stale lease is replaced only so
+    the replacement owner can terminalize the ambiguous run without invoking
+    the analyst again.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outbox_id: str
+    case_id: str
+    token_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    claimed_at: datetime
+    lease_expires_at: datetime
+    recovery_required: bool = False
+    terminal_status: OutboxStatus | None = None
+    completed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def lease_and_terminal_state_are_consistent(self) -> "OutboxExecutionClaim":
+        if self.lease_expires_at <= self.claimed_at:
+            raise ValueError("execution claim lease must expire after it is acquired")
+        if self.terminal_status not in {None, OutboxStatus.COMPLETE, OutboxStatus.FAILED}:
+            raise ValueError("execution claim terminal status must be COMPLETE or FAILED")
+        if (self.terminal_status is None) != (self.completed_at is None):
+            raise ValueError("execution claim terminal status and completion time must be set together")
+        return self
 
 
 class HandoffRecord(BaseModel):

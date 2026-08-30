@@ -2,7 +2,9 @@
 
 Canaries are supplied as SHA-256 digests plus exact character lengths. The
 scanner hashes same-length windows from text artifacts, so raw canary values do
-not need to appear in the manifest, report, or console output.
+not need to appear in the manifest, report, or console output. Short canaries
+may opt into field-aware structured-value matching for semantic text, opaque
+metadata, numeric scalars, and URI/reference fields.
 """
 
 from __future__ import annotations
@@ -92,10 +94,13 @@ def load_manifest(path: Path) -> dict[str, Any]:
     for canary in canaries:
         digest = canary.get("sha256")
         length = canary.get("length")
+        matching = canary.get("matching", "exact_window")
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
             raise ValueError("Every canary requires a 64-character SHA-256 digest.")
         if not isinstance(length, int) or length < 1 or length > 4096:
             raise ValueError("Every canary requires an exact character length from 1 to 4096.")
+        if matching not in {"exact_window", "structured_values"}:
+            raise ValueError("Canary matching must be exact_window or structured_values.")
     for pattern in patterns:
         expression = pattern.get("regex")
         if not isinstance(expression, str) or not expression:
@@ -167,19 +172,19 @@ def scan_text(
     findings: list[dict[str, Any]],
     counts: Counter[str],
 ) -> None:
-    by_length: dict[int, dict[str, list[str]]] = {}
+    by_length: dict[int, dict[str, list[dict[str, Any]]]] = {}
     for canary in canaries:
-        by_length.setdefault(canary["length"], {}).setdefault(canary["sha256"].lower(), []).append(canary["id"])
-    for length, digest_to_ids in by_length.items():
+        by_length.setdefault(canary["length"], {}).setdefault(canary["sha256"].lower(), []).append(canary)
+    for length, digest_to_canaries in by_length.items():
         if len(text) < length:
             continue
         for index in range(0, len(text) - length + 1):
             window_digest = hashlib.sha256(text[index : index + length].encode("utf-8")).hexdigest()
-            for canary_id in digest_to_ids.get(window_digest, []):
+            for canary in digest_to_canaries.get(window_digest, []):
                 record_finding(
                     findings,
                     counts,
-                    rule_id=canary_id,
+                    rule_id=canary["id"],
                     kind="digest_canary",
                     file_label=file_label,
                     text=text,
@@ -196,6 +201,144 @@ def scan_text(
                 text=text,
                 index=match.start(),
             )
+
+
+OPAQUE_PRIVACY_FIELD_SUFFIXES = (
+    "_at",
+    "_at_utc",
+    "_digest",
+    "_digests",
+    "_etag",
+    "_generation",
+    "_generations",
+    "_hash",
+    "_hashes",
+    "_id",
+    "_ids",
+    "_sha",
+    "_sha256",
+    "_utc",
+)
+OPAQUE_PRIVACY_FIELD_NAMES = {
+    "checksum",
+    "digest",
+    "etag",
+    "generation",
+    "hash",
+    "id",
+    "sha256",
+    "evidence_digests",
+    "idempotency_key",
+    "last_replay_task_name",
+    "project_number",
+    "release_task_name",
+    "submitted_commit",
+    "task_name",
+    "workflow_epoch",
+}
+REFERENCE_PRIVACY_FIELD_SUFFIXES = (
+    "_bucket",
+    "_file",
+    "_namespace",
+    "_origin",
+    "_package",
+    "_path",
+    "_ref",
+    "_refs",
+    "_resource",
+    "_resources",
+    "_revision",
+    "_uri",
+    "_url",
+)
+REFERENCE_PRIVACY_FIELD_NAMES = {
+    "bucket",
+    "entrypoint",
+    "evidence_refs",
+    "firestore_namespace",
+    "origin",
+    "package",
+    "path",
+    "render",
+    "renderer",
+    "repository",
+    "resource",
+    "revision",
+    "source",
+    "source_file",
+    "uri",
+    "url",
+}
+
+
+def privacy_field_mode(field_name: str) -> str:
+    if field_name in REFERENCE_PRIVACY_FIELD_NAMES or field_name.endswith(REFERENCE_PRIVACY_FIELD_SUFFIXES):
+        return "reference"
+    if field_name in OPAQUE_PRIVACY_FIELD_NAMES or field_name.endswith(OPAQUE_PRIVACY_FIELD_SUFFIXES):
+        return "opaque"
+    return "semantic"
+
+
+def iter_structured_scalars(value: Any, *, mode: str = "semantic") -> Iterable[tuple[str, str]]:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            yield key_text, "semantic"
+            yield from iter_structured_scalars(
+                child,
+                mode=privacy_field_mode(key_text),
+            )
+        return
+    if isinstance(value, list):
+        for child in value:
+            yield from iter_structured_scalars(child, mode=mode)
+        return
+    if isinstance(value, str):
+        yield value, mode
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        yield str(value), "opaque"
+
+
+def reference_window_has_token_boundaries(scalar: str, index: int, length: int) -> bool:
+    end = index + length
+    left_boundary = index == 0 or not scalar[index - 1].isalnum()
+    right_boundary = end == len(scalar) or not scalar[end].isalnum()
+    return left_boundary and right_boundary
+
+
+def scan_structured_json_canaries(
+    value: Any,
+    text: str,
+    file_label: str,
+    canaries: list[dict[str, Any]],
+    findings: list[dict[str, Any]],
+    counts: Counter[str],
+) -> None:
+    for scalar, mode in iter_structured_scalars(value):
+        for canary in canaries:
+            length = canary["length"]
+            if len(scalar) < length:
+                continue
+            indices = [0] if mode == "opaque" and len(scalar) == length else range(0, len(scalar) - length + 1)
+            if mode == "opaque" and len(scalar) != length:
+                continue
+            for scalar_index in indices:
+                window = scalar[scalar_index : scalar_index + length]
+                if hashlib.sha256(window.encode("utf-8")).hexdigest() != canary["sha256"].lower():
+                    continue
+                if mode == "reference" and not reference_window_has_token_boundaries(scalar, scalar_index, length):
+                    continue
+                source_index = text.find(json.dumps(scalar, ensure_ascii=False))
+                record_finding(
+                    findings,
+                    counts,
+                    rule_id=canary["id"],
+                    kind="digest_canary",
+                    file_label=file_label,
+                    text=text,
+                    index=max(source_index, 0),
+                )
 
 
 def run_scan(
@@ -234,14 +377,34 @@ def run_scan(
         decode_replacements += text.count("\ufffd")
         scanned_files += 1
         scanned_bytes += size
+        all_canaries = manifest.get("canaries", [])
+        structured_canaries = [
+            canary for canary in all_canaries if canary.get("matching", "exact_window") == "structured_values"
+        ]
+        exact_canaries = [canary for canary in all_canaries if canary not in structured_canaries]
+        parsed_json = None
+        if path.suffix.lower() == ".json" and structured_canaries:
+            try:
+                parsed_json = json.loads(text)
+            except json.JSONDecodeError:
+                parsed_json = None
         scan_text(
             text,
             file_label,
-            manifest.get("canaries", []),
+            exact_canaries if parsed_json is not None else all_canaries,
             compiled_patterns,
             findings,
             counts,
         )
+        if parsed_json is not None:
+            scan_structured_json_canaries(
+                parsed_json,
+                text,
+                file_label,
+                structured_canaries,
+                findings,
+                counts,
+            )
     total_findings = sum(counts.values())
     report = {
         "schema_version": "1.0",
@@ -260,7 +423,13 @@ def run_scan(
         "findings_by_rule": dict(sorted(counts.items())),
         "recorded_findings": findings,
         "finding_values_included": False,
-        "disclosure": "This is a UTF-8 text scan. Unsupported binary files are counted but not content-scanned. Findings contain rule IDs and locations only; canary and matched values are never written or printed.",
+        "disclosure": (
+            "This is a UTF-8 text scan. Unsupported binary files are counted but not content-scanned. "
+            "Findings contain rule IDs and locations only; canary and matched values are never written or printed. "
+            "Validated per-canary matching modes compare entropy-bearing JSON metadata and numeric scalars exactly, "
+            "match reference fields only at token boundaries, and scan semantic JSON strings plus unstructured text "
+            "for every matching substring."
+        ),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
