@@ -71,7 +71,11 @@ def _production_settings(**changes) -> Settings:
 def _production_app():
     settings = _production_settings()
     repository = InMemoryRepository()
-    reset_demo_repository(repository, settings.secret_pepper)
+    reset_demo_repository(
+        repository,
+        settings.secret_pepper,
+        occurred_at=datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc),
+    )
     return create_app(
         settings=settings,
         repository=repository,
@@ -521,6 +525,27 @@ def test_production_reset_requires_admin_token_and_preserves_unrelated_cases():
     assert unrelated_after.status_code == 200
 
 
+def test_demo_reset_stamps_the_new_epoch_from_the_service_clock():
+    reset_at = datetime(2026, 8, 31, 12, 34, 56, 789012, tzinfo=timezone.utc)
+    app = _production_app()
+    service = app.state.custody_service
+    service.clock = lambda: reset_at
+
+    with TestClient(app) as client:
+        reset = client.post(
+            "/api/v1/demo/reset",
+            headers={"X-Found-Roll-Admin-Token": ADMIN_TOKEN},
+        )
+
+    assert reset.status_code == 200, reset.text
+    case = service.repository.get_case(DEMO_CASE_ID)
+    events = service.repository.list_events(DEMO_CASE_ID)
+    assert case.created_at == reset_at
+    assert case.updated_at == reset_at
+    assert len(events) == 1
+    assert events[0].occurred_at == reset_at
+
+
 def test_production_synthetic_reset_requires_scoped_namespace():
     unsafe = _production_settings(firestore_namespace="foundRoll")
     with pytest.raises(ValueError, match="synthetic_demo"):
@@ -672,7 +697,11 @@ def test_firestore_fixture_reset_deletes_only_exact_synthetic_scope():
     repository._client = _FakeFirestoreClient(rows)
     repository._firestore = _FakeFirestoreModule()
 
-    reset_demo_repository(repository, "test-synthetic-pepper")
+    reset_demo_repository(
+        repository,
+        "test-synthetic-pepper",
+        occurred_at=datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc),
+    )
 
     assert rows[f"{prefix}_passports/{DEMO_CASE_ID}"]["version"] == 1
     demo_events = [

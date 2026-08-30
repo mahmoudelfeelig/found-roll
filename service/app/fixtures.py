@@ -92,9 +92,12 @@ def fixture_case() -> CaseRecord:
     )
 
 
-def reset_demo_repository(repo: Repository, pepper: str) -> None:
+def reset_demo_repository(repo: Repository, pepper: str, *, occurred_at: datetime) -> None:
+    case = fixture_case().model_copy(
+        update={"created_at": occurred_at, "updated_at": occurred_at}
+    )
     repo.replace_synthetic_fixture(
-        fixture_case(),
+        case,
         fixture_candidates(pepper),
         actor="fixture:system",
         reason=(
@@ -102,5 +105,5 @@ def reset_demo_repository(repo: Repository, pepper: str) -> None:
             "No physical possession or ownership claim is made."
         ),
         idempotency_key="fixture:camera-pouch:create:v1",
-        occurred_at=datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc),
+        occurred_at=occurred_at,
     )

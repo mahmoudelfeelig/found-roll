@@ -258,7 +258,11 @@ def create_app(
         settings=settings,
     )
     if seed_demo and settings.demo_mode and settings.repository_backend == "memory":
-        reset_demo_repository(repo, settings.secret_pepper)
+        reset_demo_repository(
+            repo,
+            settings.secret_pepper,
+            occurred_at=service.clock(),
+        )
 
     application = FastAPI(
         title="Found Roll Custody Service",

@@ -77,7 +77,11 @@ class CustodyService:
     def reset_demo(self) -> dict:
         if not self.settings.demo_mode:
             raise Forbidden("demo_reset_disabled", "Demo reset is disabled in this environment.")
-        reset_demo_repository(self.repository, self.settings.secret_pepper)
+        reset_demo_repository(
+            self.repository,
+            self.settings.secret_pepper,
+            occurred_at=self.clock(),
+        )
         return self.snapshot(DEMO_CASE_ID)
 
     def _publish_outbox(self, outbox) -> dict:
