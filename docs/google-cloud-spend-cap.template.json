@@ -1,15 +1,20 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "kind": "found-roll-google-cloud-spend-cap-preflight",
   "status": "BLOCKED",
-  "observed_at_utc": "<spend-cap-observed-at-utc>",
+  "attestation_version": "found-roll-zero-real-money-v1",
+  "attestation_source": "entrant_direct_confirmation",
+  "attestation_batch_id": "<attestation-batch-uuid>",
+  "attestation_text_sha256": "<sha256-of-exact-entrant-confirmation>",
+  "attested_at_utc": "<entrant-attestation-recorded-at-utc>",
   "project_id": "found-roll-agentic-20260830",
   "service_target": "<cloud_run-or-agent_platform>",
   "cap_status": "UNVERIFIED",
+  "cap_amount_minor_units": 0,
+  "cap_currency": "EUR",
   "project_scope_confirmed": false,
   "service_scope_confirmed": false,
   "lowest_practical_demo_target_confirmed": false,
-  "redacted_capture_path": "artifacts/private/<cloud-run-or-agent-platform>-spend-cap-redacted.png",
-  "redacted_capture_sha256": "<redacted-spend-cap-capture-sha256>",
-  "redacted_console_receipt_reviewed": false
+  "no_cap_change_during_release_confirmed": false,
+  "entrant_attestation_confirmed": false
 }

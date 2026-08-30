@@ -18,6 +18,8 @@ import {
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const verifierPath = path.join(projectRoot, "scripts", "verify-submission-readiness.mjs");
+const approvedEntrantAttestationText = "done free trial active, project linked minimum caps were 10 and 5 euros respectively";
+const approvedEntrantAttestationSha256 = "5ab75588420cca012f174e63eba3ca05f83e88cad99f93916543a335171b6a82";
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -95,15 +97,6 @@ function fixturePng(width = 960, height = 540) {
     pngChunk("IHDR", ihdr),
     pngChunk("IDAT", deflateSync(scanlines)),
     pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-function withPngText(raw, text) {
-  const iendLength = 12;
-  return Buffer.concat([
-    raw.subarray(0, raw.byteLength - iendLength),
-    pngChunk("tEXt", Buffer.from(`audit\0${text}`, "latin1")),
-    raw.subarray(raw.byteLength - iendLength),
   ]);
 }
 
@@ -400,9 +393,9 @@ async function createFixture(t) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-readiness-"));
   const nowMilliseconds = Date.now();
   const releaseCreatedAt = new Date(nowMilliseconds - 60_000).toISOString();
-  const billingObservedAt = new Date(nowMilliseconds - 4 * 60_000).toISOString();
-  const cloudRunObservedAt = new Date(nowMilliseconds - 3 * 60_000).toISOString();
-  const agentPlatformObservedAt = new Date(nowMilliseconds - 2 * 60_000).toISOString();
+  const attestedAt = new Date(nowMilliseconds - 4 * 60_000).toISOString();
+  const cliCheckedAt = new Date(nowMilliseconds - 2 * 60_000).toISOString();
+  const attestationBatchId = "75c5ca24-1961-4ee5-a1c9-a6d847203510";
   t.after(async () => rm(repoRoot, { recursive: true, force: true }));
   for (const directory of [
     "docs",
@@ -705,54 +698,51 @@ async function createFixture(t) {
   };
   const privacyPath = path.join(repoRoot, "artifacts", "private", "canonical-privacy-receipt.json");
   const privacyFile = await writeJson(privacyPath, privacyReceipt);
-  const billingCapture = fixturePng(800, 600);
-  const cloudRunCapture = fixturePng(801, 600);
-  const agentPlatformCapture = fixturePng(802, 600);
-  const billingCapturePath = path.join(repoRoot, "artifacts", "private", "billing-overview-redacted.png");
-  const cloudRunCapturePath = path.join(repoRoot, "artifacts", "private", "cloud-run-spend-cap-redacted.png");
-  const agentPlatformCapturePath = path.join(repoRoot, "artifacts", "private", "agent-platform-spend-cap-redacted.png");
-  await writeFile(billingCapturePath, billingCapture);
-  await writeFile(cloudRunCapturePath, cloudRunCapture);
-  await writeFile(agentPlatformCapturePath, agentPlatformCapture);
   const billingPreflightReceipt = {
-    schema_version: "1",
+    schema_version: "2",
     kind: "found-roll-google-cloud-billing-preflight",
     status: "PASS",
-    observed_at_utc: billingObservedAt,
+    attestation_version: "found-roll-zero-real-money-v1",
+    attestation_source: "entrant_direct_confirmation",
+    attestation_batch_id: attestationBatchId,
+    attestation_text_sha256: approvedEntrantAttestationSha256,
+    attested_at_utc: attestedAt,
+    cli_checked_at_utc: cliCheckedAt,
     project_id: "found-roll-agentic-20260830",
     billing_account_name_sha256: "a".repeat(64),
     account_type: "free_trial",
-    billing_enabled: true,
-    remaining_credit_visible: true,
+    billing_enabled_cli_observed: true,
+    billing_account_open_cli_observed: true,
     remaining_credit_greater_than_zero: true,
-    remaining_time_visible: true,
     remaining_time_greater_than_zero: true,
     paid_activation_absent: true,
-    redacted_capture_path: "artifacts/private/billing-overview-redacted.png",
-    redacted_capture_sha256: sha256(billingCapture),
-    redacted_console_receipt_reviewed: true,
+    no_paid_upgrade_or_payment_during_release_confirmed: true,
+    entrant_attestation_confirmed: true,
   };
   const cloudRunSpendCapReceipt = {
-    schema_version: "1",
+    schema_version: "2",
     kind: "found-roll-google-cloud-spend-cap-preflight",
     status: "PASS",
-    observed_at_utc: cloudRunObservedAt,
+    attestation_version: "found-roll-zero-real-money-v1",
+    attestation_source: "entrant_direct_confirmation",
+    attestation_batch_id: attestationBatchId,
+    attestation_text_sha256: approvedEntrantAttestationSha256,
+    attested_at_utc: attestedAt,
     project_id: "found-roll-agentic-20260830",
     service_target: "cloud_run",
     cap_status: "CONFIGURED",
+    cap_amount_minor_units: 1000,
+    cap_currency: "EUR",
     project_scope_confirmed: true,
     service_scope_confirmed: true,
     lowest_practical_demo_target_confirmed: true,
-    redacted_capture_path: "artifacts/private/cloud-run-spend-cap-redacted.png",
-    redacted_capture_sha256: sha256(cloudRunCapture),
-    redacted_console_receipt_reviewed: true,
+    no_cap_change_during_release_confirmed: true,
+    entrant_attestation_confirmed: true,
   };
   const agentPlatformSpendCapReceipt = {
     ...cloudRunSpendCapReceipt,
-    observed_at_utc: agentPlatformObservedAt,
     service_target: "agent_platform",
-    redacted_capture_path: "artifacts/private/agent-platform-spend-cap-redacted.png",
-    redacted_capture_sha256: sha256(agentPlatformCapture),
+    cap_amount_minor_units: 500,
   };
   const billingPreflightPath = path.join(repoRoot, "artifacts", "private", "billing-overview-receipt.json");
   const cloudRunSpendCapPath = path.join(repoRoot, "artifacts", "private", "cloud-run-spend-cap-receipt.json");
@@ -1230,13 +1220,10 @@ async function createFixture(t) {
     cleanBrowserPath,
     billingPreflightReceipt,
     billingPreflightPath,
-    billingCapturePath,
     cloudRunSpendCapReceipt,
     cloudRunSpendCapPath,
-    cloudRunCapturePath,
     agentPlatformSpendCapReceipt,
     agentPlatformSpendCapPath,
-    agentPlatformCapturePath,
     appStorageReceipt,
     appStoragePath,
     simulatorStorageReceipt,
@@ -1248,10 +1235,54 @@ function failureCodes(result) {
   return new Set(result.failures.map((failure) => failure.code));
 }
 
+async function rebindPreflightReceipt(fixture, target) {
+  const bindings = {
+    billing: [
+      fixture.billingPreflightReceipt,
+      fixture.billingPreflightPath,
+      fixture.record.google_cloud.preflight_receipts.billing_overview,
+    ],
+    cloud_run: [
+      fixture.cloudRunSpendCapReceipt,
+      fixture.cloudRunSpendCapPath,
+      fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap,
+    ],
+    agent_platform: [
+      fixture.agentPlatformSpendCapReceipt,
+      fixture.agentPlatformSpendCapPath,
+      fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap,
+    ],
+  };
+  const [receipt, receiptPath, binding] = bindings[target];
+  binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+}
+
 test("a fully bound offline release record passes without network activity", async (t) => {
   const fixture = await createFixture(t);
   const result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.deepEqual(result, { ok: true, failures: [] });
+});
+
+test("only the approved entrant-attestation text digest passes preflight and full readiness", async (t) => {
+  assert.equal(sha256(approvedEntrantAttestationText), approvedEntrantAttestationSha256);
+
+  const approved = await createFixture(t);
+  assert.deepEqual(await verifyGoogleCloudPreflight(approved.record, approved), { ok: true, failures: [] });
+  assert.deepEqual(await verifySubmissionReadiness(approved.record, approved), { ok: true, failures: [] });
+
+  const wrong = await createFixture(t);
+  const syntacticallyValidWrongDigest = "e".repeat(64);
+  wrong.billingPreflightReceipt.attestation_text_sha256 = syntacticallyValidWrongDigest;
+  wrong.cloudRunSpendCapReceipt.attestation_text_sha256 = syntacticallyValidWrongDigest;
+  wrong.agentPlatformSpendCapReceipt.attestation_text_sha256 = syntacticallyValidWrongDigest;
+  await rebindPreflightReceipt(wrong, "billing");
+  await rebindPreflightReceipt(wrong, "cloud_run");
+  await rebindPreflightReceipt(wrong, "agent_platform");
+
+  const preflight = await verifyGoogleCloudPreflight(wrong.record, wrong);
+  const full = await verifySubmissionReadiness(wrong.record, wrong);
+  assert.equal(failureCodes(preflight).has("GOOGLE_CLOUD_PREFLIGHT_ATTESTATION"), true);
+  assert.equal(failureCodes(full).has("GOOGLE_CLOUD_PREFLIGHT_ATTESTATION"), true);
 });
 
 test("cloud readiness requires an active free trial and both service spend caps", async (t) => {
@@ -1291,7 +1322,7 @@ test("cloud readiness requires an active free trial and both service spend caps"
   assert.equal(failureCodes(result).has("DEDICATED_PROJECT_LABEL"), true);
 });
 
-test("cloud preflight binds fresh Billing Overview and both configured service-cap receipts", async (t) => {
+test("cloud preflight binds fresh entrant attestations and CLI-corroborated billing state", async (t) => {
   const fixture = await createFixture(t);
   let result = await verifyGoogleCloudPreflight(fixture.record, fixture);
   assert.deepEqual(result, { ok: true, failures: [] });
@@ -1309,41 +1340,72 @@ test("cloud preflight binds fresh Billing Overview and both configured service-c
   assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_RECEIPT"), true);
 
   fixture.billingPreflightReceipt.paid_activation_absent = true;
-  const restoredBilling = await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt);
-  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = restoredBilling.digest;
+  await rebindPreflightReceipt(fixture, "billing");
   fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap.sha256 = "0".repeat(64);
   result = await verifyGoogleCloudPreflight(fixture.record, fixture);
   assert.equal(failureCodes(result).has("RECEIPT_DIGEST_MISMATCH"), true);
 
-  fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap.sha256 = (
-    await writeJson(fixture.cloudRunSpendCapPath, fixture.cloudRunSpendCapReceipt)
-  ).digest;
-  await appendFile(fixture.cloudRunCapturePath, "capture-drift", "utf8");
+  await rebindPreflightReceipt(fixture, "cloud_run");
+  fixture.billingPreflightReceipt.no_paid_upgrade_or_payment_during_release_confirmed = false;
+  await rebindPreflightReceipt(fixture, "billing");
   result = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_RECEIPT"), true);
 
-  fixture.billingPreflightReceipt.observed_at_utc = "2026-08-27T20:40:00Z";
-  const staleBilling = await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt);
-  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = staleBilling.digest;
+  fixture.billingPreflightReceipt.no_paid_upgrade_or_payment_during_release_confirmed = true;
+  fixture.billingPreflightReceipt.cli_checked_at_utc = "2026-08-27T20:40:00Z";
+  await rebindPreflightReceipt(fixture, "billing");
   result = await verifyGoogleCloudPreflight(fixture.record, fixture);
   assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
 });
 
-test("operational cloud preflight requires ten-minute Chrome evidence while full readiness permits 24 hours", async (t) => {
+test("a twelve-minute-old entrant attestation passes while CLI and release checks are fresh", async (t) => {
   const fixture = await createFixture(t);
-  const observedAt = new Date(fixture.nowMilliseconds - 12 * 60_000).toISOString();
+  const attestedAt = new Date(fixture.nowMilliseconds - 12 * 60_000).toISOString();
   for (const [receipt, receiptPath, binding] of [
     [fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview],
     [fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap],
     [fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap],
   ]) {
-    receipt.observed_at_utc = observedAt;
+    receipt.attested_at_utc = attestedAt;
     binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
   }
   const full = await verifySubmissionReadiness(fixture.record, fixture);
   assert.deepEqual(full, { ok: true, failures: [] });
   const operational = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(operational).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+  assert.deepEqual(operational, { ok: true, failures: [] });
+});
+
+test("full readiness requires a CLI billing check and release timestamp from the last ten minutes", async (t) => {
+  const staleCli = await createFixture(t);
+  staleCli.billingPreflightReceipt.cli_checked_at_utc = new Date(staleCli.nowMilliseconds - 12 * 60_000).toISOString();
+  await rebindPreflightReceipt(staleCli, "billing");
+  let result = await verifySubmissionReadiness(staleCli.record, staleCli);
+  assert.equal(
+    result.failures.some((failure) => (
+      failure.code === "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"
+      && failure.message.includes("billing_overview_receipt.cli_checked_at_utc")
+    )),
+    true,
+  );
+
+  const staleRelease = await createFixture(t);
+  staleRelease.record.created_at_utc = new Date(staleRelease.nowMilliseconds - 11 * 60_000).toISOString();
+  const stillCurrentAttestation = new Date(staleRelease.nowMilliseconds - 12 * 60_000).toISOString();
+  staleRelease.billingPreflightReceipt.attested_at_utc = stillCurrentAttestation;
+  staleRelease.billingPreflightReceipt.cli_checked_at_utc = new Date(staleRelease.nowMilliseconds - 11.5 * 60_000).toISOString();
+  staleRelease.cloudRunSpendCapReceipt.attested_at_utc = stillCurrentAttestation;
+  staleRelease.agentPlatformSpendCapReceipt.attested_at_utc = stillCurrentAttestation;
+  await rebindPreflightReceipt(staleRelease, "billing");
+  await rebindPreflightReceipt(staleRelease, "cloud_run");
+  await rebindPreflightReceipt(staleRelease, "agent_platform");
+  result = await verifySubmissionReadiness(staleRelease.record, staleRelease);
+  assert.equal(
+    result.failures.some((failure) => (
+      failure.code === "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"
+      && failure.message.includes("release_record.created_at_utc")
+    )),
+    true,
+  );
 });
 
 test("billing preflight binds a private hash of the exact live billing account resource", async (t) => {
@@ -1729,67 +1791,102 @@ test("teardown identity ignores stale billing evidence but requires the frozen r
   assert.equal(failureCodes(changed).has("TAG_MISMATCH"), true);
 });
 
-test("cloud preflight rejects receipts that are mutually fresh but stale against the wall clock", async (t) => {
-  const fixture = await createFixture(t);
-  fixture.record.created_at_utc = "2000-01-02T00:00:00Z";
-  for (const [receipt, receiptPath, binding] of [
-    [fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview],
-    [fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap],
-    [fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap],
-  ]) {
-    receipt.observed_at_utc = "2000-01-01T23:59:00Z";
-    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
-  }
-
-  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
-});
-
-test("cloud preflight rejects opaque bytes disguised as a PNG", async (t) => {
-  const fixture = await createFixture(t);
-  const opaqueBytes = Buffer.alloc(4096, 0x41);
-  await writeFile(fixture.billingCapturePath, opaqueBytes);
-  fixture.billingPreflightReceipt.redacted_capture_sha256 = sha256(opaqueBytes);
-  fixture.record.google_cloud.preflight_receipts.billing_overview.sha256 = (
-    await writeJson(fixture.billingPreflightPath, fixture.billingPreflightReceipt)
-  ).digest;
-
-  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
-});
-
-test("cloud preflight requires three distinct capture paths and digests", async (t) => {
-  const fixture = await createFixture(t);
-  fixture.agentPlatformSpendCapReceipt.redacted_capture_path = fixture.cloudRunSpendCapReceipt.redacted_capture_path;
-  fixture.agentPlatformSpendCapReceipt.redacted_capture_sha256 = fixture.cloudRunSpendCapReceipt.redacted_capture_sha256;
-  fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap.sha256 = (
-    await writeJson(fixture.agentPlatformSpendCapPath, fixture.agentPlatformSpendCapReceipt)
-  ).digest;
-
-  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
-});
-
-test("cloud preflight rejects metadata-only variants of one capture", async (t) => {
-  const fixture = await createFixture(t);
-  const originalPixels = fixturePng(800, 600);
-  const variants = [
-    withPngText(originalPixels, "billing"),
-    withPngText(originalPixels, "cloud-run"),
-    withPngText(originalPixels, "agent-platform"),
+test("cloud preflight requires exact attestation schemas, source, and entrant commitments", async (t) => {
+  const cases = [
+    ["billing schema version", "billing", (receipt) => { receipt.schema_version = "1"; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["attestation version", "billing", (receipt) => { receipt.attestation_version = "found-roll-zero-real-money-v2"; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["attestation source", "billing", (receipt) => { receipt.attestation_source = "browser_screenshot"; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["entrant confirmation", "billing", (receipt) => { receipt.entrant_attestation_confirmed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["CLI billing link", "billing", (receipt) => { receipt.billing_enabled_cli_observed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["CLI billing account state", "billing", (receipt) => { receipt.billing_account_open_cli_observed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["no paid upgrade commitment", "billing", (receipt) => { receipt.no_paid_upgrade_or_payment_during_release_confirmed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["cap entrant confirmation", "cloud_run", (receipt) => { receipt.entrant_attestation_confirmed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["no cap change commitment", "agent_platform", (receipt) => { receipt.no_cap_change_during_release_confirmed = false; }, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT"],
+    ["missing attestation field", "billing", (receipt) => { delete receipt.entrant_attestation_confirmed; }, "RECORD_MISSING_FIELD"],
+    ["unknown attestation field", "billing", (receipt) => { receipt.redacted_capture_path = "obsolete.png"; }, "RECORD_UNKNOWN_FIELDS"],
   ];
-  for (const [capturePath, receipt, receiptPath, binding, raw] of [
-    [fixture.billingCapturePath, fixture.billingPreflightReceipt, fixture.billingPreflightPath, fixture.record.google_cloud.preflight_receipts.billing_overview, variants[0]],
-    [fixture.cloudRunCapturePath, fixture.cloudRunSpendCapReceipt, fixture.cloudRunSpendCapPath, fixture.record.google_cloud.preflight_receipts.cloud_run_spend_cap, variants[1]],
-    [fixture.agentPlatformCapturePath, fixture.agentPlatformSpendCapReceipt, fixture.agentPlatformSpendCapPath, fixture.record.google_cloud.preflight_receipts.agent_platform_spend_cap, variants[2]],
-  ]) {
-    await writeFile(capturePath, raw);
-    receipt.redacted_capture_sha256 = sha256(raw);
-    binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
-  }
 
-  const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
-  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_CAPTURE"), true);
+  for (const [label, target, mutate, expectedCode] of cases) {
+    const fixture = await createFixture(t);
+    const receipt = target === "billing"
+      ? fixture.billingPreflightReceipt
+      : target === "cloud_run"
+        ? fixture.cloudRunSpendCapReceipt
+        : fixture.agentPlatformSpendCapReceipt;
+    mutate(receipt);
+    await rebindPreflightReceipt(fixture, target);
+    const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+    assert.equal(failureCodes(result).has(expectedCode), true, `${label} must fail closed`);
+  }
+});
+
+test("cloud preflight binds all receipts to one attestation batch, timestamp, and text", async (t) => {
+  for (const [label, mutate] of [
+    ["batch", (receipt) => { receipt.attestation_batch_id = "33d0f9aa-7c83-4a4b-9db2-cab909470bd2"; }],
+    ["timestamp", (receipt) => { receipt.attested_at_utc = new Date(Date.parse(receipt.attested_at_utc) - 1_000).toISOString(); }],
+    ["text", (receipt) => { receipt.attestation_text_sha256 = "e".repeat(64); }],
+  ]) {
+    const fixture = await createFixture(t);
+    mutate(fixture.agentPlatformSpendCapReceipt);
+    await rebindPreflightReceipt(fixture, "agent_platform");
+    const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_ATTESTATION"), true, `${label} mismatch must fail closed`);
+  }
+});
+
+test("cloud preflight requires the exact project, service targets, and EUR cap amounts", async (t) => {
+  const cases = [
+    ["billing project", "billing", (receipt) => { receipt.project_id = "found-roll-agentic-wrong"; }],
+    ["Cloud Run project", "cloud_run", (receipt) => { receipt.project_id = "found-roll-agentic-wrong"; }],
+    ["Cloud Run service", "cloud_run", (receipt) => { receipt.service_target = "agent_platform"; }],
+    ["Agent Platform service", "agent_platform", (receipt) => { receipt.service_target = "cloud_run"; }],
+    ["Cloud Run currency", "cloud_run", (receipt) => { receipt.cap_currency = "USD"; }],
+    ["Cloud Run wrong amount", "cloud_run", (receipt) => { receipt.cap_amount_minor_units = 999; }],
+    ["Agent Platform wrong amount", "agent_platform", (receipt) => { receipt.cap_amount_minor_units = 1000; }],
+    ["zero amount", "cloud_run", (receipt) => { receipt.cap_amount_minor_units = 0; }],
+    ["negative amount", "cloud_run", (receipt) => { receipt.cap_amount_minor_units = -1; }],
+    ["fractional amount", "cloud_run", (receipt) => { receipt.cap_amount_minor_units = 1000.5; }],
+    ["string amount", "cloud_run", (receipt) => { receipt.cap_amount_minor_units = "1000"; }],
+  ];
+
+  for (const [label, target, mutate] of cases) {
+    const fixture = await createFixture(t);
+    const receipt = target === "billing"
+      ? fixture.billingPreflightReceipt
+      : target === "cloud_run"
+        ? fixture.cloudRunSpendCapReceipt
+        : fixture.agentPlatformSpendCapReceipt;
+    mutate(receipt);
+    await rebindPreflightReceipt(fixture, target);
+    const result = await verifyGoogleCloudPreflight(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_RECEIPT"), true, `${label} must fail closed`);
+  }
+});
+
+test("cloud preflight independently enforces attestation, CLI-check, and release freshness", async (t) => {
+  const staleAttestation = await createFixture(t);
+  const attestedAt = new Date(staleAttestation.nowMilliseconds - 25 * 60 * 60_000).toISOString();
+  for (const [receipt, target] of [
+    [staleAttestation.billingPreflightReceipt, "billing"],
+    [staleAttestation.cloudRunSpendCapReceipt, "cloud_run"],
+    [staleAttestation.agentPlatformSpendCapReceipt, "agent_platform"],
+  ]) {
+    receipt.attested_at_utc = attestedAt;
+    await rebindPreflightReceipt(staleAttestation, target);
+  }
+  let result = await verifyGoogleCloudPreflight(staleAttestation.record, staleAttestation);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+
+  const staleCli = await createFixture(t);
+  staleCli.billingPreflightReceipt.cli_checked_at_utc = new Date(staleCli.nowMilliseconds - 11 * 60_000).toISOString();
+  await rebindPreflightReceipt(staleCli, "billing");
+  result = await verifyGoogleCloudPreflight(staleCli.record, staleCli);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
+
+  const staleRelease = await createFixture(t);
+  staleRelease.record.created_at_utc = new Date(staleRelease.nowMilliseconds - 11 * 60_000).toISOString();
+  result = await verifyGoogleCloudPreflight(staleRelease.record, staleRelease);
+  assert.equal(failureCodes(result).has("GOOGLE_CLOUD_PREFLIGHT_FRESHNESS"), true);
 });
 
 test("cloud preflight requires an inspectable repository with ignored private artifacts", async (t) => {
@@ -2285,6 +2382,84 @@ foreach ($Case in $InvalidCases) {
   assert.match(result.stdout, /POWERSHELL_GUARDS_PASS/);
 });
 
+test("the preflight refresh helper rejects a billing-account relink within one attestation batch", async (t) => {
+  const fixture = await createFixture(t);
+  const originalBillingAccountResource = "billingAccounts/AAAAAA-AAAAAA-AAAAAA";
+  const relinkedBillingAccountResource = "billingAccounts/BBBBBB-BBBBBB-BBBBBB";
+  fixture.billingPreflightReceipt.billing_account_name_sha256 = sha256(originalBillingAccountResource);
+  await rebindPreflightReceipt(fixture, "billing");
+  await writeJson(fixture.recordPath, fixture.record);
+
+  const helperPath = path.join(fixture.repoRoot, "scripts", "refresh-google-cloud-preflight.ps1");
+  await writeFile(
+    helperPath,
+    await readFile(path.join(projectRoot, "scripts", "refresh-google-cloud-preflight.ps1"), "utf8"),
+    "utf8",
+  );
+  for (const filename of [
+    "google-cloud-billing-preflight.template.json",
+    "google-cloud-spend-cap.template.json",
+    "submission-release.template.json",
+  ]) {
+    await writeFile(
+      path.join(fixture.repoRoot, "docs", filename),
+      await readFile(path.join(projectRoot, "docs", filename), "utf8"),
+      "utf8",
+    );
+  }
+
+  const mockGcloudPath = path.join(fixture.repoRoot, "scripts", "mock-gcloud.ps1");
+  const mockGcloud = `$JoinedArguments = $args -join ' '
+if ($JoinedArguments -like 'projects describe *') {
+    '{"projectId":"found-roll-agentic-20260830","projectNumber":"1061926987746","createTime":"2026-08-29T22:58:52.064Z","lifecycleState":"ACTIVE","labels":{"found-roll-purpose":"dedicated-hackathon-demo"}}'
+    $global:LASTEXITCODE = 0
+    return
+}
+if ($JoinedArguments -like 'billing projects describe *') {
+    '{"billingEnabled":true,"billingAccountName":"${relinkedBillingAccountResource}"}'
+    $global:LASTEXITCODE = 0
+    return
+}
+if ($JoinedArguments -like 'billing accounts describe *') {
+    '{"open":true}'
+    $global:LASTEXITCODE = 0
+    return
+}
+$global:LASTEXITCODE = 2
+throw "Unexpected mocked gcloud invocation: $JoinedArguments"
+`;
+  await writeFile(mockGcloudPath, mockGcloud, "utf8");
+
+  const result = spawnSync("pwsh", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    helperPath,
+    "-ProjectId",
+    "found-roll-agentic-20260830",
+    "-GcloudPath",
+    mockGcloudPath,
+    "-AttestationTextSha256",
+    approvedEntrantAttestationSha256,
+    "-AttestedAtUtc",
+    fixture.billingPreflightReceipt.attested_at_utc,
+    "-AttestationBatchId",
+    fixture.billingPreflightReceipt.attestation_batch_id,
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /billing account.*(?:changed|relink|attestation batch)/i);
+  const preservedReceipt = JSON.parse(await readFile(fixture.billingPreflightPath, "utf8"));
+  assert.equal(preservedReceipt.billing_account_name_sha256, sha256(originalBillingAccountResource));
+});
+
 test("local privacy receipts must bind the current canary manifest", async (t) => {
   const fixture = await createFixture(t);
   const receiptPath = path.join(fixture.repoRoot, "evaluation", "privacy-scan-results.json");
@@ -2472,7 +2647,7 @@ test("the CLI binds HEAD, local tag, configured remote, and a clean worktree", a
 
   await writeFile(
     path.join(fixture.repoRoot, ".gitignore"),
-    "artifacts/private/*\n!artifacts/private/billing-overview-redacted.png\n",
+    "artifacts/private/*\n!artifacts/private/billing-overview-receipt.json\n",
     "utf8",
   );
   preflightCli = spawnSync(process.execPath, [

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -11,11 +12,20 @@ export const SUBMISSION_TEMPLATE_PATH = "docs/submission-release.template.json";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepoRoot = path.resolve(path.dirname(scriptPath), "..");
+const canonicalDefaultRepoRoot = realpathSync.native(defaultRepoRoot);
 const maxJsonBytes = 1024 * 1024;
 const maxArtifactBytes = 64 * 1024 * 1024;
 const preflightFreshnessMilliseconds = 24 * 60 * 60 * 1000;
 const operationalPreflightFreshnessMilliseconds = 10 * 60 * 1000;
 const preflightFutureSkewMilliseconds = 5 * 60 * 1000;
+const googleCloudAttestationVersion = "found-roll-zero-real-money-v1";
+const googleCloudAttestationSource = "entrant_direct_confirmation";
+const expectedEntrantAttestationTextSha256 = "5ab75588420cca012f174e63eba3ca05f83e88cad99f93916543a335171b6a82";
+const googleCloudAttestationBatchPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const expectedSpendCapMinorUnits = Object.freeze({
+  cloud_run: 1000,
+  agent_platform: 500,
+});
 const sha256Pattern = /^[a-f0-9]{64}$/i;
 const commitPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{1,255}$/;
@@ -1147,7 +1157,16 @@ function validateDocumentationEvidence(rawByPath, failures) {
   const analysisLeaseSeconds = analysisLeaseMatch ? Number.parseInt(analysisLeaseMatch[1], 10) : null;
   const queueMinimumBackoffSeconds = queueMinimumBackoffMatch ? Number.parseInt(queueMinimumBackoffMatch[1], 10) : null;
   const projectDescribeIndex = deployment.indexOf("$ProjectState = gcloud projects describe $ProjectId");
-  const projectLabelIndex = deployment.indexOf("gcloud projects update $ProjectId --update-labels");
+  const resourceManagerEnableIndex = deployment.indexOf(
+    "gcloud services enable cloudresourcemanager.googleapis.com --project=$ProjectId",
+  );
+  const projectLabelPreservationIndex = deployment.indexOf(
+    "foreach ($LabelProperty in $ProjectState.labels.PSObject.Properties)",
+  );
+  const projectLabelPatchIndex = deployment.indexOf(
+    '-Uri "https://cloudresourcemanager.googleapis.com/v3/projects/${ProjectNumber}?updateMask=labels"',
+  );
+  const projectLabelVerificationIndex = deployment.indexOf("$ProjectLabelVerified = $false");
   const preservingJsonParserCount = (deployment.match(/^function\s+ConvertFrom-JsonPreservingStrings\s*\{/gmi) || []).length;
   const preservingJsonVersionGateCount = (deployment.match(/\$PSVersionTable\.PSVersion\s+-lt\s+\[version\]'7\.5'/g) || []).length;
   const preservingJsonCapabilityCheckCount = (deployment.match(/Parameters\.ContainsKey\('DateKind'\)/g) || []).length;
@@ -1187,7 +1206,8 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/SUBMISSION READINESS: PASS/i.test(deployment)
     || !/GOOGLE CLOUD TEARDOWN IDENTITY: PASS/i.test(deployment)
     || !/billing_account_name_sha256/i.test(deployment)
-    || !/redacted_capture_sha256/i.test(deployment)
+    || !/entrant_attestation_confirmed/i.test(deployment)
+    || !/billing_account_open_cli_observed/i.test(deployment)
     || cloudRunDeployCount === 0
     || gatedCloudRunDeployCount !== cloudRunDeployCount
     || projectPinnedCloudRunDeployCount !== cloudRunDeployCount
@@ -1282,7 +1302,10 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/google-cloud-resource-identity\.json/i.test(deployment)
     || !/project_created_at_utc/i.test(deployment)
     || projectDescribeIndex < 0
-    || projectLabelIndex <= projectDescribeIndex
+    || resourceManagerEnableIndex <= projectDescribeIndex
+    || projectLabelPreservationIndex <= resourceManagerEnableIndex
+    || projectLabelPatchIndex <= projectLabelPreservationIndex
+    || projectLabelVerificationIndex <= projectLabelPatchIndex
     || preservingJsonParserCount !== 2
     || preservingJsonVersionGateCount !== 2
     || preservingJsonCapabilityCheckCount !== 2
@@ -1759,71 +1782,48 @@ async function loadReceipt(repoRoot, relativePath, expectedDigest, fieldPath, fa
   return receipt;
 }
 
-async function loadPrivateEvidenceArtifact(repoRoot, relativePath, expectedDigest, fieldPath, failures) {
-  const absolute = resolvePrivateArtifact(repoRoot, relativePath, `${fieldPath}_path`, failures);
-  if (!absolute) return null;
-  if (!/\.png$/i.test(String(relativePath || ""))) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} must be a redacted PNG capture.`);
-    return null;
-  }
-  let raw;
-  try {
-    raw = await readRegularFileWithin(path.join(repoRoot, "artifacts", "private"), absolute, maxArtifactBytes);
-  } catch {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} could not be read as a bounded private artifact.`);
-    return null;
-  }
-  if (raw.byteLength < 1024) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} is too small to be substantive console evidence.`);
-  }
-  const dimensions = inspectPng(raw);
-  if (!dimensions || dimensions.width < 640 || dimensions.height < 360) {
-    addFailure(
-      failures,
-      "GOOGLE_CLOUD_PREFLIGHT_CAPTURE",
-      `${fieldPath} must be a structurally valid, substantive PNG of at least 640 by 360 pixels.`,
-    );
-    return null;
-  }
-  if (!sha256Pattern.test(String(expectedDigest || "")) || sha256(raw) !== String(expectedDigest).toLowerCase()) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", `${fieldPath} does not match its supplied SHA-256 digest.`);
-  }
-  return {
-    width: dimensions.width,
-    height: dimensions.height,
-    pixelSha256: dimensions.pixelSha256,
-  };
-}
-
 function freshnessLabel(maximumAgeMilliseconds) {
   return maximumAgeMilliseconds < 60 * 60 * 1000
     ? `${maximumAgeMilliseconds / 60_000} minutes`
     : `${maximumAgeMilliseconds / (60 * 60 * 1000)} hours`;
 }
 
-function validatePreflightTimestamp(
+function validateEvidenceTimestamp(
   receipt,
+  timestampField,
   releaseRecord,
   fieldPath,
   failures,
   nowMilliseconds,
   maximumAgeMilliseconds = preflightFreshnessMilliseconds,
 ) {
-  const receiptValid = requireUtcTimestamp(receipt?.observed_at_utc, `${fieldPath}.observed_at_utc`, failures);
+  const receiptValid = requireUtcTimestamp(receipt?.[timestampField], `${fieldPath}.${timestampField}`, failures);
   const releaseValid = requireUtcTimestamp(releaseRecord?.created_at_utc, "release_record.created_at_utc", failures);
   if (!receiptValid || !releaseValid) return;
-  const receiptTime = Date.parse(receipt.observed_at_utc);
+  const receiptTime = Date.parse(receipt[timestampField]);
   const releaseTime = Date.parse(releaseRecord.created_at_utc);
   const ageMilliseconds = releaseTime - receiptTime;
   if (ageMilliseconds < 0 || ageMilliseconds > maximumAgeMilliseconds) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.observed_at_utc must be no more than ${freshnessLabel(maximumAgeMilliseconds)} before the release-record timestamp.`);
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.${timestampField} must be no more than ${freshnessLabel(maximumAgeMilliseconds)} before the release-record timestamp.`);
   }
   if (
     receiptTime > nowMilliseconds + preflightFutureSkewMilliseconds
     || nowMilliseconds - receiptTime > maximumAgeMilliseconds
   ) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.observed_at_utc must be within ${freshnessLabel(maximumAgeMilliseconds)} of the current wall clock and not more than five minutes in the future.`);
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_FRESHNESS", `${fieldPath}.${timestampField} must be within ${freshnessLabel(maximumAgeMilliseconds)} of the current wall clock and not more than five minutes in the future.`);
   }
+}
+
+function validateEntrantAttestationTimestamp(receipt, releaseRecord, fieldPath, failures, nowMilliseconds) {
+  validateEvidenceTimestamp(
+    receipt,
+    "attested_at_utc",
+    releaseRecord,
+    fieldPath,
+    failures,
+    nowMilliseconds,
+    preflightFreshnessMilliseconds,
+  );
 }
 
 function validatePreflightReleaseTimestamp(
@@ -1842,8 +1842,7 @@ function validatePreflightReleaseTimestamp(
   }
 }
 
-async function validateBillingPreflightReceipt(
-  repoRoot,
+function validateBillingPreflightReceipt(
   receipt,
   releaseRecord,
   failures,
@@ -1856,60 +1855,65 @@ async function validateBillingPreflightReceipt(
     "schema_version",
     "kind",
     "status",
-    "observed_at_utc",
+    "attestation_version",
+    "attestation_source",
+    "attestation_batch_id",
+    "attestation_text_sha256",
+    "attested_at_utc",
+    "cli_checked_at_utc",
     "project_id",
     "billing_account_name_sha256",
     "account_type",
-    "billing_enabled",
-    "remaining_credit_visible",
+    "billing_enabled_cli_observed",
+    "billing_account_open_cli_observed",
     "remaining_credit_greater_than_zero",
-    "remaining_time_visible",
     "remaining_time_greater_than_zero",
     "paid_activation_absent",
-    "redacted_capture_path",
-    "redacted_capture_sha256",
-    "redacted_console_receipt_reviewed",
+    "no_paid_upgrade_or_payment_during_release_confirmed",
+    "entrant_attestation_confirmed",
   ], failures)) return;
   const requiredValues = {
-    schema_version: "1",
+    schema_version: "2",
     kind: "found-roll-google-cloud-billing-preflight",
     status: "PASS",
+    attestation_version: googleCloudAttestationVersion,
+    attestation_source: googleCloudAttestationSource,
     project_id: releaseRecord?.google_cloud?.project_id,
     account_type: "free_trial",
-    billing_enabled: true,
-    remaining_credit_visible: true,
+    billing_enabled_cli_observed: true,
+    billing_account_open_cli_observed: true,
     remaining_credit_greater_than_zero: true,
-    remaining_time_visible: true,
     remaining_time_greater_than_zero: true,
     paid_activation_absent: true,
-    redacted_console_receipt_reviewed: true,
+    no_paid_upgrade_or_payment_during_release_confirmed: true,
+    entrant_attestation_confirmed: true,
   };
   for (const [key, expected] of Object.entries(requiredValues)) {
     if (receipt[key] !== expected) {
       addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT", `${base}.${key} must match the active unupgraded Free Trial preflight.`);
     }
   }
+  requireIdentifier(receipt.attestation_batch_id, `${base}.attestation_batch_id`, failures, googleCloudAttestationBatchPattern);
+  requireSha256(receipt.attestation_text_sha256, `${base}.attestation_text_sha256`, failures);
   requireSha256(receipt.billing_account_name_sha256, `${base}.billing_account_name_sha256`, failures);
-  validatePreflightTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds, maximumAgeMilliseconds);
-  requireIdentifier(receipt.redacted_capture_path, `${base}.redacted_capture_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
-  requireSha256(receipt.redacted_capture_sha256, `${base}.redacted_capture_sha256`, failures);
-  return loadPrivateEvidenceArtifact(
-    repoRoot,
-    receipt.redacted_capture_path,
-    receipt.redacted_capture_sha256,
-    `${base}.redacted_capture`,
+  validateEntrantAttestationTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds);
+  validateEvidenceTimestamp(
+    receipt,
+    "cli_checked_at_utc",
+    releaseRecord,
+    base,
     failures,
+    nowMilliseconds,
+    maximumAgeMilliseconds,
   );
 }
 
-async function validateSpendCapPreflightReceipt(
-  repoRoot,
+function validateSpendCapPreflightReceipt(
   receipt,
   expectedTarget,
   releaseRecord,
   failures,
   nowMilliseconds,
-  maximumAgeMilliseconds,
 ) {
   if (!receipt) return;
   const base = `${expectedTarget}_spend_cap_receipt`;
@@ -1917,44 +1921,50 @@ async function validateSpendCapPreflightReceipt(
     "schema_version",
     "kind",
     "status",
-    "observed_at_utc",
+    "attestation_version",
+    "attestation_source",
+    "attestation_batch_id",
+    "attestation_text_sha256",
+    "attested_at_utc",
     "project_id",
     "service_target",
     "cap_status",
+    "cap_amount_minor_units",
+    "cap_currency",
     "project_scope_confirmed",
     "service_scope_confirmed",
     "lowest_practical_demo_target_confirmed",
-    "redacted_capture_path",
-    "redacted_capture_sha256",
-    "redacted_console_receipt_reviewed",
+    "no_cap_change_during_release_confirmed",
+    "entrant_attestation_confirmed",
   ], failures)) return;
   const requiredValues = {
-    schema_version: "1",
+    schema_version: "2",
     kind: "found-roll-google-cloud-spend-cap-preflight",
     status: "PASS",
+    attestation_version: googleCloudAttestationVersion,
+    attestation_source: googleCloudAttestationSource,
     project_id: releaseRecord?.google_cloud?.project_id,
     service_target: expectedTarget,
     cap_status: "CONFIGURED",
+    cap_amount_minor_units: expectedSpendCapMinorUnits[expectedTarget],
+    cap_currency: "EUR",
     project_scope_confirmed: true,
     service_scope_confirmed: true,
     lowest_practical_demo_target_confirmed: true,
-    redacted_console_receipt_reviewed: true,
+    no_cap_change_during_release_confirmed: true,
+    entrant_attestation_confirmed: true,
   };
   for (const [key, expected] of Object.entries(requiredValues)) {
     if (receipt[key] !== expected) {
       addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT", `${base}.${key} must match the configured project-and-service spend cap.`);
     }
   }
-  validatePreflightTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds, maximumAgeMilliseconds);
-  requireIdentifier(receipt.redacted_capture_path, `${base}.redacted_capture_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
-  requireSha256(receipt.redacted_capture_sha256, `${base}.redacted_capture_sha256`, failures);
-  return loadPrivateEvidenceArtifact(
-    repoRoot,
-    receipt.redacted_capture_path,
-    receipt.redacted_capture_sha256,
-    `${base}.redacted_capture`,
-    failures,
-  );
+  requireIdentifier(receipt.attestation_batch_id, `${base}.attestation_batch_id`, failures, googleCloudAttestationBatchPattern);
+  requireSha256(receipt.attestation_text_sha256, `${base}.attestation_text_sha256`, failures);
+  if (!Number.isInteger(receipt.cap_amount_minor_units) || receipt.cap_amount_minor_units <= 0) {
+    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_RECEIPT", `${base}.cap_amount_minor_units must be a positive integer.`);
+  }
+  validateEntrantAttestationTimestamp(receipt, releaseRecord, base, failures, nowMilliseconds);
 }
 
 async function loadAndValidateGoogleCloudPreflightReceipts(
@@ -1987,30 +1997,28 @@ async function loadAndValidateGoogleCloudPreflightReceipts(
     "agent_platform_spend_cap_receipt",
     failures,
   );
-  const [billingCapture, cloudRunCapture, agentPlatformCapture] = await Promise.all([
-    validateBillingPreflightReceipt(repoRoot, billing, releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
-    validateSpendCapPreflightReceipt(repoRoot, cloudRun, "cloud_run", releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
-    validateSpendCapPreflightReceipt(repoRoot, agentPlatform, "agent_platform", releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds),
-  ]);
-  const captureBindings = [
-    [billing, billingCapture],
-    [cloudRun, cloudRunCapture],
-    [agentPlatform, agentPlatformCapture],
-  ].filter(([receipt, capture]) => isPlainObject(receipt) && isPlainObject(capture))
-    .map(([receipt, capture]) => ({
-      path: String(receipt.redacted_capture_path || "").toLowerCase(),
-      sha256: String(receipt.redacted_capture_sha256 || "").toLowerCase(),
-      pixelSha256: capture.pixelSha256,
-    }));
-  if (
-    captureBindings.length === 3
-    && (
-      new Set(captureBindings.map((binding) => binding.path)).size !== 3
-      || new Set(captureBindings.map((binding) => binding.sha256)).size !== 3
-      || new Set(captureBindings.map((binding) => binding.pixelSha256)).size !== 3
-    )
-  ) {
-    addFailure(failures, "GOOGLE_CLOUD_PREFLIGHT_CAPTURE", "Billing Overview, Cloud Run, and Agent Platform must each bind a distinct redacted PNG path, file digest, and decoded pixel image.");
+  validateBillingPreflightReceipt(billing, releaseRecord, failures, nowMilliseconds, maximumAgeMilliseconds);
+  validateSpendCapPreflightReceipt(cloudRun, "cloud_run", releaseRecord, failures, nowMilliseconds);
+  validateSpendCapPreflightReceipt(agentPlatform, "agent_platform", releaseRecord, failures, nowMilliseconds);
+
+  const attestations = [billing, cloudRun, agentPlatform].filter(isPlainObject);
+  if (attestations.length === 3) {
+    const batchIds = new Set(attestations.map((receipt) => receipt.attestation_batch_id));
+    const timestamps = new Set(attestations.map((receipt) => receipt.attested_at_utc));
+    const textDigests = new Set(attestations.map((receipt) => String(receipt.attestation_text_sha256 || "").toLowerCase()));
+    if (batchIds.size !== 1 || timestamps.size !== 1 || textDigests.size !== 1) {
+      addFailure(
+        failures,
+        "GOOGLE_CLOUD_PREFLIGHT_ATTESTATION",
+        "Billing, Cloud Run, and Agent Platform receipts must bind the same entrant-attestation batch, timestamp, and text digest.",
+      );
+    } else if (!textDigests.has(expectedEntrantAttestationTextSha256)) {
+      addFailure(
+        failures,
+        "GOOGLE_CLOUD_PREFLIGHT_ATTESTATION",
+        "The entrant-attestation text digest does not match the exact approved confirmation for this release.",
+      );
+    }
   }
   return { billing, cloudRun, agentPlatform };
 }
@@ -3745,8 +3753,23 @@ function validatePrivateArtifactGitState(gitState, failures) {
   }
 }
 
+function gitArguments(repoRoot, args) {
+  let canonicalRepoRoot = null;
+  try {
+    canonicalRepoRoot = realpathSync.native(repoRoot);
+  } catch {
+    return args;
+  }
+  const normalizeForComparison = (value) => (
+    process.platform === "win32" ? value.toLowerCase() : value
+  );
+  if (normalizeForComparison(canonicalRepoRoot) !== normalizeForComparison(canonicalDefaultRepoRoot)) return args;
+  const safeDirectory = canonicalDefaultRepoRoot.replaceAll("\\", "/");
+  return ["-c", `safe.directory=${safeDirectory}`, ...args];
+}
+
 function runGit(repoRoot, args) {
-  const result = spawnSync("git", args, {
+  const result = spawnSync("git", gitArguments(repoRoot, args), {
     cwd: repoRoot,
     encoding: "utf8",
     shell: false,
@@ -3759,7 +3782,7 @@ function runGit(repoRoot, args) {
 }
 
 function runGitStatus(repoRoot, args) {
-  const result = spawnSync("git", args, {
+  const result = spawnSync("git", gitArguments(repoRoot, args), {
     cwd: repoRoot,
     encoding: "utf8",
     shell: false,
@@ -3795,13 +3818,6 @@ function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loa
       projectStorageReceipts.after_app_source_deploy?.path,
       projectStorageReceipts.after_simulator_source_deploy?.path,
     );
-  }
-  for (const receipt of [
-    loadedPreflightReceipts.billing,
-    loadedPreflightReceipts.cloudRun,
-    loadedPreflightReceipts.agentPlatform,
-  ]) {
-    if (isPlainObject(receipt)) values.push(receipt.redacted_capture_path);
   }
   return values.filter((value) => typeof value === "string");
 }
@@ -3870,13 +3886,19 @@ export async function verifySubmissionReadiness(releaseRecord, {
     }
   }
 
-  validatePreflightReleaseTimestamp(releaseRecord, failures, preflightNowMilliseconds);
+  validatePreflightReleaseTimestamp(
+    releaseRecord,
+    failures,
+    preflightNowMilliseconds,
+    operationalPreflightFreshnessMilliseconds,
+  );
   await validateGoogleCloudResourceIdentity(repoRoot, releaseRecord, failures);
   const loadedPreflightReceipts = await loadAndValidateGoogleCloudPreflightReceipts(
     repoRoot,
     releaseRecord,
     failures,
     preflightNowMilliseconds,
+    operationalPreflightFreshnessMilliseconds,
   );
   const projectStorageReceipts = await loadAndValidateProjectStorageReceipts(repoRoot, releaseRecord, failures);
 
@@ -4061,7 +4083,7 @@ export function formatReadinessResult(result) {
 }
 
 export function formatGoogleCloudPreflightResult(result) {
-  if (result.ok) return "GOOGLE CLOUD PREFLIGHT: PASS\nThe active Free Trial and both project-and-service spend caps are hash-bound and fresh.\n";
+  if (result.ok) return "GOOGLE CLOUD PREFLIGHT: PASS\nThe entrant-attested Free Trial and spend caps are hash-bound, and the billing link is freshly CLI-corroborated.\n";
   const lines = [`GOOGLE CLOUD PREFLIGHT: FAIL (${result.failures.length})`];
   for (const failure of result.failures) lines.push(`- [${failure.code}] ${failure.message}`);
   return `${lines.join("\n")}\n`;

@@ -30,32 +30,43 @@ Use a dedicated hackathon project, not a shared production project.
 
 This deployment is **not Always Free**. The pinned Gemini model is priced usage, eight active Secret Manager versions exceed the six-version billing-account allowance, public Cloud Run traffic can consume billable resources, and `gcloud run deploy --source` creates Cloud Build, Cloud Storage, and Artifact Registry artifacts. Any nominal product free tier is a possible credit reduction, not the authorization boundary.
 
-The hard zero-real-money boundary is an active, unexpired, **unupgraded Google Cloud Free Trial**. Before enabling deployment APIs, open Billing Overview in Chrome and capture a redacted manual receipt that proves all of the following for the account linked to this dedicated project:
+The hard zero-real-money boundary is an active, unexpired, **unupgraded Google Cloud Free Trial**. Before enabling deployment APIs, obtain a direct entrant confirmation, no more than 24 hours old, that proves all of the following for the account linked to this dedicated project:
 
 - the account type literally says **Free trial account**;
 - remaining trial credit is greater than zero;
 - remaining trial time is greater than zero; and
-- paid activation or upgrade has not occurred.
+- paid activation or upgrade has not occurred and no upgrade, payment, deposit, or paid-account conversion will be made during this release.
 
-Stop if the account is paid, upgraded, expired, absent, or cannot be distinguished from a paid account. Never click **Activate** or **Upgrade**, add a payment, make a deposit, or convert the account for this project. `gcloud billing projects describe` can confirm that billing is linked, but it cannot prove the account is an unupgraded Free Trial; the Billing Overview receipt is mandatory. The private release record must say `billing_account_type: "free_trial"` exactly and confirm remaining credit, remaining time, and absence of paid activation.
+Stop if the account is paid, upgraded, expired, absent, or cannot be distinguished from a paid account. Never click **Activate** or **Upgrade**, add a payment, make a deposit, or convert the account for this project. The private release record must say `billing_account_type: "free_trial"` exactly and confirm remaining credit, remaining time, absence of paid activation, and the no-upgrade/no-payment commitment.
 
-Before API enablement, create two separate project-and-service spend caps in the Cloud Billing console's Preview spend-cap flow, each at the lowest practical demo target: one scoped to Cloud Run and one scoped to the Gemini/Agent Platform service used by the Vertex AI call. Capture a redacted receipt for each cap and do not set the corresponding release-record confirmations until both are enabled. These caps are defense in depth only: enforcement is delayed, in-flight work or overage can still be charged, and persistent or storage resources outside the capped service can keep accruing. Ordinary budget alerts remain informational. Spend caps do not make a paid account acceptable and do not replace the unupgraded Free Trial boundary.
+Before API enablement, create two separate project-and-service controls in the Cloud Billing console's **Preview spend-cap** flow: a Cloud Run cap of **EUR 10** and a Gemini/Agent Platform cap of **EUR 5**, both scoped to `found-roll-agentic-20260830`. The entrant must directly confirm that both say `Configured`, use those exact project/service scopes and amounts, are the lowest practical demo targets, and will not be changed during the release. Preview enforcement is not exposed through the public Google Cloud CLI or API, so the cap state cannot be independently queried by this runbook. These caps are defense in depth only: enforcement is delayed, in-flight work or overage can still consume trial credit, and persistent or storage resources outside the capped service can keep accruing. Ordinary budget alerts remain informational. Spend caps do not make a paid account acceptable and do not replace the unupgraded Free Trial boundary.
 
-Keep three distinct redacted Chrome PNG captures under ignored `artifacts/private/`: Billing Overview, the configured Cloud Run cap, and the configured Gemini/Agent Platform cap. Copy `docs/google-cloud-billing-preflight.template.json` once and `docs/google-cloud-spend-cap.template.json` twice into the exact private JSON paths named by `docs/submission-release.template.json`. Each structured receipt must bind its own matching redacted PNG through `redacted_capture_path` and `redacted_capture_sha256`, identify this exact project and service target, use a fresh UTC observation timestamp, and remain `BLOCKED` until the visible console evidence proves every required field. Store only `billing_account_name_sha256`, the SHA-256 of the exact live `billingAccountName` resource string; never store the raw account resource name, credit amount, payment method, or other billing details in JSON. Copy the release template to `artifacts/private/submission-release.json`, fill only its Google Cloud preflight fields, set `created_at_utc` after the three observations, bind all three JSON receipt hashes, and run:
+The schema-v2 preflight deliberately combines two different evidence sources. Direct entrant attestation supplies the Free Trial, remaining-credit/time, paid-activation, no-upgrade/no-payment, and spend-cap facts that the public CLI/API cannot expose. Live CLI reads independently bind the exact tracked project to an enabled billing link, hash the linked billing-account resource without storing it, and prove that the linked account is currently open. A screenshot or PNG is not required or consumed by the verifier, and the verifier does not claim to semantically prove the entrant's attested console facts.
+
+On the first run for an attestation batch, pass a lowercase SHA-256 of the exact direct confirmation, the UTC time when that confirmation was received, and a fresh UUID v4. The verifier pins the approved confirmation digest for this release, so a different but syntactically valid digest is rejected. Do not copy the raw confirmation, billing-account resource name, credit amount, payment method, or other billing details into the repository or private JSON. The checked refresh script creates or updates the three ignored receipts and `artifacts/private/submission-release.json`, stores only `billing_account_name_sha256` for the linked billing-account resource, records `billing_account_open_cli_observed` and `entrant_attestation_confirmed`, binds the receipt hashes, and runs the operational verifier:
 
 ```powershell
-$PreflightVerifierLines = @(& node scripts/verify-submission-readiness.mjs --record artifacts/private/submission-release.json --preflight-only 2>&1)
-$PreflightVerifierExitCode = $LASTEXITCODE
-$PreflightVerifierOutput = $PreflightVerifierLines -join "`n"
-if ($PreflightVerifierExitCode -ne 0 -or $PreflightVerifierOutput -notmatch '(?m)^GOOGLE CLOUD PREFLIGHT: PASS$') {
-    throw 'Google Cloud preflight is not hash-bound and deployment remains blocked.'
+$AttestationTextSha256 = '<lowercase-sha256-of-exact-direct-entrant-confirmation>'
+$AttestedAtUtc = '<entrant-confirmation-received-at-utc>'
+$AttestationBatchId = [guid]::NewGuid().ToString()
+$PreflightRefreshLines = @(& ./scripts/refresh-google-cloud-preflight.ps1 `
+    -ProjectId 'found-roll-agentic-20260830' `
+    -AttestationTextSha256 $AttestationTextSha256 `
+    -AttestedAtUtc $AttestedAtUtc `
+    -AttestationBatchId $AttestationBatchId `
+    -CloudRunCapMinorUnits 1000 `
+    -AgentPlatformCapMinorUnits 500 2>&1)
+$PreflightRefreshExitCode = $LASTEXITCODE
+$PreflightRefreshOutput = $PreflightRefreshLines -join "`n"
+if ($PreflightRefreshExitCode -ne 0 -or $PreflightRefreshOutput -notmatch '(?m)^GOOGLE CLOUD PREFLIGHT: PASS$') {
+    throw 'Google Cloud preflight is not attestation-and-CLI bound, so deployment remains blocked.'
 }
-$PreflightVerifierOutput
+$PreflightRefreshOutput
 ```
 
-The preflight-only verifier loads all three private JSON receipts, validates each capture as a substantive PNG, requires three distinct paths, file hashes, and decoded pixel images, verifies every receipt and capture path remains ignored and untracked, and requires both the receipts and release record to be within ten minutes of the current wall clock. Full submission verification permits a 24-hour evidence window, but the operational preflight intentionally does not. It rejects a wrong project, paid or unverified account, missing credit/time, paid activation, a changed billing-account hash, or either unconfigured service cap. Immediately before every potentially billable phase, refresh all three Chrome pages, replace all three captures and receipt timestamps/hashes, update the preflight release-record timestamp and receipt hashes, and rerun the wrapper. A hand-edited confirmation without the bound captures does not pass. The console remains the only source for proving that the same linked account is still an unupgraded Free Trial; if that Chrome state is ambiguous or changes, stop.
+The direct attestation timestamp must remain within 24 hours of the release record and current wall clock. For every operational `--preflight-only` gate, the refresh script's live CLI billing check and regenerated release-record timestamp must be within ten minutes of both each other and the current wall clock. The verifier rejects a wrong project, malformed or mismatched attestation batch, paid or unverified attestation, missing credit/time confirmation, absent no-upgrade/no-payment commitment, changed billing-account hash, closed account, or either wrong service cap. Subsequent refreshes within the same 24-hour batch may omit the three attestation parameters; the script reuses the bound attestation, re-queries the live billing link and open-account state, updates the receipt hashes and release timestamp, and reruns `--preflight-only`. Once the attestation exceeds 24 hours, or if any attested fact may have changed, stop and obtain a new direct entrant confirmation, timestamp, text digest, and UUID batch before continuing. Never hand-edit a `PASS` receipt.
 
-Use one dedicated project in `us-central1`. Keep both Cloud Run services request-based with service-level and revision-level zero minimum instances, one maximum instance, one CPU, 512 MiB memory, CPU throttling, and no startup CPU boost. Do not add a VPC connector, load balancer, custom domain, GPU, Cloud SQL, paid support, Firestore backup/PITR/TTL, Artifact Analysis scanning, or any resource not listed in this runbook. Delete noncanonical build artifacts as you go and delete the dedicated project after judging. If the Free Trial receipt or either service spend-cap receipt is missing, do not enable deployment APIs or deploy.
+Use one dedicated project in `us-central1`. Keep both Cloud Run services request-based with service-level and revision-level zero minimum instances, one maximum instance, one CPU, 512 MiB memory, CPU throttling, and no startup CPU boost. Do not add a VPC connector, load balancer, custom domain, GPU, Cloud SQL, paid support, Firestore backup/PITR/TTL, Artifact Analysis scanning, or any resource not listed in this runbook. Delete noncanonical build artifacts as you go and delete the dedicated project after judging. If the schema-v2 Free Trial receipt or either service spend-cap receipt is missing, expired, inconsistent, or fails the refresh script, do not enable deployment APIs or deploy.
 
 ```powershell
 Set-StrictMode -Version Latest
@@ -298,8 +309,62 @@ if (
     [string]$ProjectState.createTime -ne $ProjectCreatedAt -or
     $ProjectState.lifecycleState -ne "ACTIVE"
 ) { throw 'The live project does not match the pre-authorized tracked Found Roll identity.' }
-gcloud projects update $ProjectId --update-labels="$DedicatedProjectLabelKey=$DedicatedProjectLabelValue" --project=$ProjectId
-Assert-LastGcloudSuccess -Operation 'dedicated-project labeling'
+
+# This control-plane API enablement is non-billable and is intentionally separate
+# from the runtime API enablement guarded below.
+gcloud services enable cloudresourcemanager.googleapis.com --project=$ProjectId
+Assert-LastGcloudSuccess -Operation 'Cloud Resource Manager control-plane API enablement'
+
+$ProjectLabels = [ordered]@{}
+if ($null -ne $ProjectState.labels) {
+    foreach ($LabelProperty in $ProjectState.labels.PSObject.Properties) {
+        $ProjectLabels[$LabelProperty.Name] = [string]$LabelProperty.Value
+    }
+}
+$ProjectLabels[$DedicatedProjectLabelKey] = $DedicatedProjectLabelValue
+$ProjectLabelBody = [ordered]@{
+    name = "projects/$ProjectNumber"
+    labels = $ProjectLabels
+} | ConvertTo-Json -Depth 4 -Compress
+$AccessTokenLines = @(& gcloud auth print-access-token)
+if ($LASTEXITCODE -ne 0) { throw 'Could not obtain an in-memory token for dedicated-project labeling.' }
+$AccessToken = ($AccessTokenLines -join "`n").Trim()
+if ([string]::IsNullOrWhiteSpace($AccessToken)) { throw 'Dedicated-project labeling received an empty access token.' }
+$Headers = @{ Authorization = "Bearer $AccessToken" }
+try {
+    $ProjectLabelOperation = Invoke-RestMethod `
+        -Method Patch `
+        -Uri "https://cloudresourcemanager.googleapis.com/v3/projects/${ProjectNumber}?updateMask=labels" `
+        -Headers $Headers `
+        -ContentType 'application/json' `
+        -Body $ProjectLabelBody `
+        -ErrorAction Stop
+} finally {
+    $Headers.Clear()
+    $AccessToken = $null
+    $AccessTokenLines = @()
+}
+if ([string]::IsNullOrWhiteSpace([string]$ProjectLabelOperation.name)) {
+    throw 'The Cloud Resource Manager label PATCH returned no operation identity.'
+}
+$ProjectLabelVerified = $false
+for ($ProjectLabelAttempt = 0; $ProjectLabelAttempt -lt 15; $ProjectLabelAttempt += 1) {
+    $LabeledProjectJson = gcloud projects describe $ProjectId --format=json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not verify the dedicated-project label after the REST PATCH.' }
+    $LabeledProject = $LabeledProjectJson | ConvertFrom-JsonPreservingStrings
+    if (
+        $LabeledProject.projectId -ne $ProjectId -or
+        [string]$LabeledProject.projectNumber -ne $ProjectNumber -or
+        [string]$LabeledProject.createTime -ne $ProjectCreatedAt -or
+        $LabeledProject.lifecycleState -ne 'ACTIVE'
+    ) { throw 'Project identity changed while verifying the dedicated-project label.' }
+    if ($LabeledProject.labels.$DedicatedProjectLabelKey -eq $DedicatedProjectLabelValue) {
+        $ProjectLabelVerified = $true
+        break
+    }
+    Start-Sleep -Seconds 2
+}
+if (-not $ProjectLabelVerified) { throw 'The dedicated-project label did not converge after the REST PATCH.' }
 
 function Assert-DedicatedProjectIdentity {
     $ActiveProject = ([string](gcloud config get-value project)).Trim()
@@ -322,51 +387,37 @@ function Assert-GoogleCloudPreflight {
     param([Parameter(Mandatory = $true)][string]$PhaseName)
     if ([string]::IsNullOrWhiteSpace($PhaseName) -or $PhaseName -match '[<>]') { throw 'Name the guarded cloud phase.' }
     Assert-DedicatedProjectIdentity
+
+    $PreflightRefreshLines = @(& ./scripts/refresh-google-cloud-preflight.ps1 -ProjectId $ProjectId 2>&1)
+    $PreflightRefreshExitCode = $LASTEXITCODE
+    $PreflightRefreshOutput = $PreflightRefreshLines -join "`n"
+    if ($PreflightRefreshExitCode -ne 0 -or $PreflightRefreshOutput -notmatch '(?m)^GOOGLE CLOUD PREFLIGHT: PASS$') {
+        throw "Fresh entrant-attestation and live-CLI preflight failed for phase '$PhaseName'."
+    }
+
     if (-not (Test-Path -LiteralPath $ReleaseRecordPath -PathType Leaf)) { throw 'The private preflight release record is missing.' }
     $PreflightRecord = Get-Content -Raw -LiteralPath $ReleaseRecordPath | ConvertFrom-JsonPreservingStrings
     if ($PreflightRecord.google_cloud.project_id -ne $ProjectId) { throw 'The preflight receipt project does not match the deployment project.' }
     if ([string]$PreflightRecord.google_cloud.project_number -ne $ProjectNumber) { throw 'The preflight receipt project number does not match the deployment project.' }
     if ([string]$PreflightRecord.google_cloud.evidence_bucket -ne $Bucket) { throw 'The preflight receipt does not bind the exact project-derived evidence bucket.' }
 
-    $PreflightVerifierLines = @(& node scripts/verify-submission-readiness.mjs --record $ReleaseRecordPath --preflight-only 2>&1)
-    $PreflightVerifierExitCode = $LASTEXITCODE
-    $PreflightVerifierOutput = $PreflightVerifierLines -join "`n"
-    if ($PreflightVerifierExitCode -ne 0 -or $PreflightVerifierOutput -notmatch '(?m)^GOOGLE CLOUD PREFLIGHT: PASS$') {
-        throw 'Free Trial and service-cap preflight did not pass.'
-    }
-    $PreflightVerifierOutput
-
-    $BillingJson = gcloud billing projects describe $ProjectId --format=json
-    if ($LASTEXITCODE -ne 0) { throw 'Could not re-read the dedicated project billing link.' }
-    $BillingInfo = $BillingJson | ConvertFrom-JsonPreservingStrings
-    if ($BillingInfo.billingEnabled -ne $true -or [string]::IsNullOrWhiteSpace($BillingInfo.billingAccountName)) {
-        throw 'The dedicated project is not linked to the hash-bound Free Trial billing account.'
-    }
     $BillingReceiptPath = Join-Path $PWD ([string]$PreflightRecord.google_cloud.preflight_receipts.billing_overview.path)
     $BillingReceipt = Get-Content -Raw -LiteralPath $BillingReceiptPath | ConvertFrom-JsonPreservingStrings
-    $LiveBillingAccountHash = Get-Sha256Hex -Value ([string]$BillingInfo.billingAccountName)
-    if ($LiveBillingAccountHash -ne [string]$BillingReceipt.billing_account_name_sha256) {
-        throw "The live billing link changed after the Chrome Free Trial receipt for phase '$PhaseName'."
+    if (
+        $BillingReceipt.entrant_attestation_confirmed -ne $true -or
+        $BillingReceipt.billing_account_open_cli_observed -ne $true
+    ) {
+        throw "The refreshed receipt does not bind both entrant attestation and live open-account CLI evidence for phase '$PhaseName'."
     }
-    Remove-Variable BillingInfo, BillingJson, LiveBillingAccountHash -ErrorAction SilentlyContinue
+    $PreflightRefreshOutput
+    Remove-Variable BillingReceipt -ErrorAction SilentlyContinue
 }
 ```
 
-After each Chrome refresh, update the billing receipt's account-resource hash from the live project link without echoing the raw resource name. Set the Chrome-observed account type, credit/time, paid-activation, timestamp, and capture fields separately from the visible page; this CLI step cannot prove those facts.
+`Assert-GoogleCloudPreflight` invokes the checked refresh script before every guarded phase. That script re-reads the exact project identity, billing link, and open billing-account state, then regenerates the hash-bound private receipts and release record before running `--preflight-only`. It does not query or infer the Free Trial credit/time, paid-activation status, or Preview spend-cap state; those remain bound to the current direct entrant attestation.
 
 ```powershell
-$BillingLinkJson = gcloud billing projects describe $ProjectId --format=json
-if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the live billing link for hashing.' }
-$BillingLink = $BillingLinkJson | ConvertFrom-JsonPreservingStrings
-if ($BillingLink.billingEnabled -ne $true -or [string]::IsNullOrWhiteSpace($BillingLink.billingAccountName)) {
-    throw 'The project has no billing link to bind to the Free Trial receipt.'
-}
-$BillingReceiptPath = Join-Path $PWD "artifacts/private/billing-overview-receipt.json"
-$BillingReceipt = Get-Content -Raw -LiteralPath $BillingReceiptPath | ConvertFrom-JsonPreservingStrings
-$BillingReceipt.billing_account_name_sha256 = Get-Sha256Hex -Value ([string]$BillingLink.billingAccountName)
-$BillingReceiptJson = $BillingReceipt | ConvertTo-Json -Depth 8
-[System.IO.File]::WriteAllText($BillingReceiptPath, $BillingReceiptJson, [System.Text.UTF8Encoding]::new($false))
-Remove-Variable BillingLink, BillingLinkJson, BillingReceipt -ErrorAction SilentlyContinue
+Assert-GoogleCloudPreflight -PhaseName "pre-deployment-refresh"
 ```
 
 Application Default Credentials are acceptable for local development under an individual account. Cloud Run uses attached service-account identity. Never run `gcloud iam service-accounts keys create`, download a JSON key, or set `GOOGLE_APPLICATION_CREDENTIALS` to a repository file.
@@ -375,7 +426,7 @@ Enable only the APIs used by the submitted architecture:
 
 ```powershell
 Assert-GoogleCloudPreflight -PhaseName "api-enablement"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com aiplatform.googleapis.com firestore.googleapis.com storage.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com cloudasset.googleapis.com iamcredentials.googleapis.com logging.googleapis.com --project=$ProjectId
+gcloud services enable cloudresourcemanager.googleapis.com run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com aiplatform.googleapis.com firestore.googleapis.com storage.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com cloudasset.googleapis.com iamcredentials.googleapis.com logging.googleapis.com --project=$ProjectId
 Assert-LastGcloudSuccess -Operation 'bounded API enablement'
 $CloudBuildLocations = @(Get-AllCloudBuildLocations)
 ```
@@ -1596,7 +1647,7 @@ $env:FOUND_ROLL_RELAY_API_KEY = gcloud secrets versions access $($SecretVersions
 ./scripts/prepare-canonical-run.ps1 -AppUrl $AppUrl -SimulatorUrl $SimulatorUrl -ReceiptPath artifacts/private/canonical-preparation-1.json
 ```
 
-Repeat the preparation and reset-to-close workflow with receipt suffixes `2` through `5`. Refresh all three Chrome receipts and run `Assert-GoogleCloudPreflight -PhaseName "canonical-gemini-run-N"` immediately before each live Gemini run. Never reuse a preparation receipt across runs: each reset must produce a distinct workflow epoch, evidence pair, and run receipt.
+Repeat the preparation and reset-to-close workflow with receipt suffixes `2` through `5`. Run `Assert-GoogleCloudPreflight -PhaseName "canonical-gemini-run-N"` immediately before each live Gemini run; the guard refreshes the CLI billing-link/open-account evidence and all three schema-v2 receipt hashes automatically. Never reuse a preparation receipt across runs: each reset must produce a distinct workflow epoch, evidence pair, and run receipt.
 
 For each execution, copy `docs/canonical-run.template.json` and `docs/chain-audit.template.json` into ignored `artifacts/private/`. Fill the run receipt only with sanitized identifiers, digests, counts, modes, and booleans. Fill the chain audit from the authenticated event-list and manifest responses for that exact case, run, workflow epoch, commit, and tree. Change the run status to `CANONICAL_PASS` and the chain-audit status to `PASS` only when every field is proven. The offline verifier recomputes every event hash, previous-hash link, evidence digest, manifest ID, and manifest digest rather than trusting those labels. After all five runs, create the shared private privacy and clean-browser receipts from `docs/canonical-privacy.template.json` and `docs/clean-browser.template.json`. Set `verified_at_utc` only from the completed clean-browser observation: it must follow the end of all five canonical runs, precede the release freeze, and remain within 24 hours of both the freeze and the verifier's wall clock. Never paste raw logs, prompts, responses, request bodies, media, tokens, signed URLs, or private object names into the sanitized run, privacy, or browser receipts; the private chain audit contains only the service event and manifest schema.
 
@@ -1647,7 +1698,7 @@ gcloud artifacts docker images list $SourceRepository --include-tags --sort-by=~
 
 If verification runs in a new PowerShell process, load the exact `Assert-ProjectStorageBound` definition from the inventory section first. The queue receipt must show one concurrent dispatch, one dispatch per second, three maximum attempts, a positive one-second maximum retry duration, 10-second minimum backoff, 60-second maximum backoff, and two doublings. The project-wide storage receipt must enumerate every bucket, report zero positive soft-delete duration, versioning, and retention, include ordinary plus soft-deleted bytes, and remain under 5 GiB in aggregate. The evidence-bucket receipt must also show the after-judging deletion lifecycle. The build/artifact inventory must retain only the protected serving/rollback images plus any exact staging object still needed for a protected completed build.
 
-Keep the redacted Billing Overview, Cloud Run spend-cap, and Gemini/Agent Platform spend-cap receipts alongside the private release evidence. The offline verifier intentionally does not query Billing; it fails closed unless the entrant explicitly confirms exact `free_trial` account type, remaining credit, remaining time, no paid activation, and both enabled spend caps.
+Keep the generated schema-v2 Billing Overview, Cloud Run spend-cap, and Gemini/Agent Platform spend-cap JSON receipts alongside the private release evidence. The offline verifier intentionally does not query Google Cloud: it fails closed unless the receipts bind the direct entrant confirmation of exact `free_trial` account type, remaining credit, remaining time, no paid activation, the no-upgrade/no-payment commitment, the EUR 10 Cloud Run cap, and the EUR 5 Agent Platform cap. The operational refresh separately verifies the live project billing link, linked-account hash, and open-account state through the CLI.
 
 Security negatives must all fail safely:
 
@@ -1736,7 +1787,7 @@ if ($ReadinessVerifierExitCode -ne 0 -or $ReadinessVerifierOutput -notmatch '(?m
 $ReadinessVerifierOutput
 ```
 
-The command is deliberately offline. It verifies local Git, source and artifact hashes, receipt structure, cross-run identity, placeholder removal, exact `billing_account_type: "free_trial"`, and hash-bound private evidence for remaining trial credit/time, absence of paid activation, and both configured service spend caps. It loads the three structured receipts and their redacted capture bytes, validates project/service/status/timestamp metadata, and requires observations within 24 hours of the release timestamp. It does not query Google Cloud or infer account type from `billing_enabled`; the live `gcloud billing projects describe` check and the Chrome evidence remain separate required facts. Public reachability, judge access, the continuous video, eligibility, ownership, truthfulness, and visual/media privacy remain explicit attestations that must be checked by the entrant.
+The command is deliberately offline. It verifies local Git, source and artifact hashes, receipt structure, cross-run identity, placeholder removal, exact `billing_account_type: "free_trial"`, a single hash-bound schema-v2 entrant-attestation batch, the exact EUR 10 and EUR 5 service caps, and the required confirmations for remaining trial credit/time, absence of paid activation, no paid upgrade/payment during release, and no cap changes. It validates project/service/status/timestamp metadata and requires the direct attestation to remain within 24 hours of the release timestamp and current wall clock. The operational `--preflight-only` gate additionally requires the live CLI billing check and regenerated release record to be no more than ten minutes old. It does not semantically prove the attested console facts or query the Preview spend-cap state, because that enforcement state is not exposed by the public CLI/API. Public reachability, judge access, the continuous video, eligibility, ownership, truthfulness, and visual/media privacy remain explicit attestations that must be checked by the entrant.
 
 No service-account private key is needed at any stage of this runbook.
 
