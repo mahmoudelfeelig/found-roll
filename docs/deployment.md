@@ -161,6 +161,86 @@ function Get-ExactStorageBucketState {
     return $BucketState
 }
 
+function Get-SoftDeletedProjectBuckets {
+    param([Parameter(Mandatory = $true)][string]$ExpectedProjectId)
+    if ($ExpectedProjectId -ne $ProjectId) { throw 'Refusing to inventory soft-deleted buckets outside the exact deployment project.' }
+    $SoftDeletedBucketAccessTokenLines = @(& gcloud auth print-access-token)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not obtain an in-memory token for the soft-deleted bucket inventory.' }
+    $SoftDeletedBucketAccessToken = ($SoftDeletedBucketAccessTokenLines -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($SoftDeletedBucketAccessToken)) { throw 'The soft-deleted bucket inventory received an empty access token.' }
+    $SoftDeletedBucketHeaders = @{ Authorization = "Bearer $SoftDeletedBucketAccessToken"; 'x-goog-user-project' = $ExpectedProjectId }
+    $PageToken = $null
+    $SoftDeletedProjectBuckets = @()
+    try {
+        do {
+            $BucketsUri = "https://storage.googleapis.com/storage/v1/b?project=$([uri]::EscapeDataString($ExpectedProjectId))&softDeleted=true&maxResults=1000&projection=noAcl&fields=items(name%2CprojectNumber)%2CnextPageToken"
+            if (-not [string]::IsNullOrWhiteSpace($PageToken)) {
+                $BucketsUri += "&pageToken=$([uri]::EscapeDataString($PageToken))"
+            }
+            $SoftDeletedBucketsPage = Invoke-RestMethod -Method Get -Uri $BucketsUri -Headers $SoftDeletedBucketHeaders -ErrorAction Stop
+            $ItemsProperty = $SoftDeletedBucketsPage.PSObject.Properties['items']
+            $PageItems = if ($null -eq $ItemsProperty -or $null -eq $ItemsProperty.Value) { @() } else { @($ItemsProperty.Value) }
+            foreach ($PageItem in @($PageItems | Where-Object { $null -ne $_ })) {
+                if (
+                    [string]::IsNullOrWhiteSpace([string]$PageItem.name) -or
+                    [string]$PageItem.projectNumber -ne $ProjectNumber
+                ) { throw 'Cloud Storage returned an invalid soft-deleted bucket identity.' }
+                $SoftDeletedProjectBuckets += [ordered]@{
+                    name = [string]$PageItem.name
+                    project_number = [string]$PageItem.projectNumber
+                }
+            }
+            $NextPageTokenProperty = $SoftDeletedBucketsPage.PSObject.Properties['nextPageToken']
+            $PageToken = if ($null -eq $NextPageTokenProperty) { '' } else { [string]$NextPageTokenProperty.Value }
+        } while (-not [string]::IsNullOrWhiteSpace($PageToken))
+    } finally {
+        $SoftDeletedBucketHeaders.Clear()
+        $SoftDeletedBucketAccessToken = $null
+        $SoftDeletedBucketAccessTokenLines = @()
+    }
+    return @($SoftDeletedProjectBuckets | Sort-Object name)
+}
+
+function Get-StorageObjectInventory {
+    param(
+        [Parameter(Mandatory = $true)][string]$BucketName,
+        [Parameter(Mandatory = $true)][string]$ExpectedProjectId,
+        [Parameter(Mandatory = $true)][ValidateSet('current', 'all_versions', 'soft_deleted')][string]$Mode
+    )
+    if ($BucketName -notmatch '^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$') { throw 'Refusing an invalid object-inventory bucket name.' }
+    if ($ExpectedProjectId -ne $ProjectId) { throw 'Refusing to inventory objects outside the exact deployment project.' }
+    $StorageObjectAccessTokenLines = @(& gcloud auth print-access-token)
+    if ($LASTEXITCODE -ne 0) { throw "Could not obtain an in-memory token for the $Mode object inventory." }
+    $StorageObjectAccessToken = ($StorageObjectAccessTokenLines -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($StorageObjectAccessToken)) { throw "The $Mode object inventory received an empty access token." }
+    $StorageObjectHeaders = @{ Authorization = "Bearer $StorageObjectAccessToken"; 'x-goog-user-project' = $ExpectedProjectId }
+    $EncodedBucketName = [uri]::EscapeDataString($BucketName)
+    $StorageObjectPageToken = $null
+    $CloudObjects = @()
+    try {
+        do {
+            $ObjectsUri = "https://storage.googleapis.com/storage/v1/b/${EncodedBucketName}/o?maxResults=1000&projection=noAcl&fields=items(name%2Cgeneration%2Csize)%2CnextPageToken"
+            if ($Mode -eq 'all_versions') { $ObjectsUri += "&versions=true" }
+            if ($Mode -eq 'soft_deleted') { $ObjectsUri += "&softDeleted=true" }
+            if (-not [string]::IsNullOrWhiteSpace($StorageObjectPageToken)) {
+                $ObjectsUri += "&pageToken=$([uri]::EscapeDataString($StorageObjectPageToken))"
+            }
+            $StorageObjectsPage = Invoke-RestMethod -Method Get -Uri $ObjectsUri -Headers $StorageObjectHeaders -ErrorAction Stop
+            $ItemsProperty = $StorageObjectsPage.PSObject.Properties['items']
+            if ($null -ne $ItemsProperty -and $null -ne $ItemsProperty.Value) {
+                $CloudObjects += @($ItemsProperty.Value | Where-Object { $null -ne $_ })
+            }
+            $NextPageTokenProperty = $StorageObjectsPage.PSObject.Properties['nextPageToken']
+            $StorageObjectPageToken = if ($null -eq $NextPageTokenProperty) { '' } else { [string]$NextPageTokenProperty.Value }
+        } while (-not [string]::IsNullOrWhiteSpace($StorageObjectPageToken))
+    } finally {
+        $StorageObjectHeaders.Clear()
+        $StorageObjectAccessToken = $null
+        $StorageObjectAccessTokenLines = @()
+    }
+    return @($CloudObjects)
+}
+
 function Assert-LastGcloudSuccess {
     param([Parameter(Mandatory = $true)][string]$Operation)
     if ($LASTEXITCODE -ne 0) { throw "gcloud failed during $Operation." }
@@ -995,10 +1075,8 @@ function Assert-ProjectStorageBound {
     if ($LASTEXITCODE -ne 0 -or $ExpectedProjectNumber -notmatch '^\d{6,20}$') {
         throw 'Could not resolve the storage-audit project number.'
     }
-    $SoftDeletedBucketOutput = @(& gcloud storage ls --buckets --soft-deleted --exhaustive --full --project=$ExpectedProjectId 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate soft-deleted project buckets.' }
-    $SoftDeletedBucketInventoryText = $SoftDeletedBucketOutput -join "`n"
-    if (-not [string]::IsNullOrWhiteSpace($SoftDeletedBucketInventoryText)) {
+    $SoftDeletedProjectBuckets = @(Get-SoftDeletedProjectBuckets -ExpectedProjectId $ExpectedProjectId)
+    if ($SoftDeletedProjectBuckets.Count -gt 0) {
         throw 'At least one soft-deleted project bucket exists and cannot be safely inventoried without restoration.'
     }
     $ProjectBuckets = @(gcloud storage buckets list --project=$ExpectedProjectId --format="value(name)" | Sort-Object)
@@ -1007,44 +1085,61 @@ function Assert-ProjectStorageBound {
     $ProjectStorageBytes = [int64]0
     $BucketReceipts = @()
     foreach ($ProjectBucket in $ProjectBuckets) {
-        gcloud storage buckets update "gs://$ProjectBucket" --project=$ExpectedProjectId --clear-soft-delete
-        Assert-LastGcloudSuccess -Operation "soft-delete disablement for gs://$ProjectBucket"
         $BucketState = Get-ExactStorageBucketState -BucketName $ProjectBucket
         if ([string]$BucketState.projectNumber -ne $ExpectedProjectNumber) {
             throw "Bucket gs://$ProjectBucket is not owned by expected project number $ExpectedProjectNumber."
         }
-        if ($BucketState.versioning.enabled -eq $true) { throw "Versioning is enabled on gs://$ProjectBucket." }
-        if ($null -ne $BucketState.retentionPolicy -and [int64]$BucketState.retentionPolicy.retentionPeriod -gt 0) {
+        $VersioningProperty = $BucketState.PSObject.Properties['versioning']
+        if ($null -ne $VersioningProperty -and $null -ne $VersioningProperty.Value -and $VersioningProperty.Value.enabled -eq $true) {
+            throw "Versioning is enabled on gs://$ProjectBucket."
+        }
+        $RetentionPolicyProperty = $BucketState.PSObject.Properties['retentionPolicy']
+        if ($null -ne $RetentionPolicyProperty -and $null -ne $RetentionPolicyProperty.Value -and [int64]$RetentionPolicyProperty.Value.retentionPeriod -gt 0) {
             throw "A retention policy is enabled on gs://$ProjectBucket."
         }
-        $SoftDeleteSeconds = [int64]0
-        if ($null -ne $BucketState.softDeletePolicy -and $null -ne $BucketState.softDeletePolicy.retentionDurationSeconds) {
-            if (-not [int64]::TryParse([string]$BucketState.softDeletePolicy.retentionDurationSeconds, [ref]$SoftDeleteSeconds)) {
+        $PreClearSoftDeleteSeconds = [int64]0
+        $SoftDeletePolicyProperty = $BucketState.PSObject.Properties['softDeletePolicy']
+        if ($null -ne $SoftDeletePolicyProperty -and $null -ne $SoftDeletePolicyProperty.Value) {
+            $RetentionDurationProperty = $SoftDeletePolicyProperty.Value.PSObject.Properties['retentionDurationSeconds']
+            if (
+                $null -ne $RetentionDurationProperty -and
+                -not [int64]::TryParse([string]$RetentionDurationProperty.Value, [ref]$PreClearSoftDeleteSeconds)
+            ) {
                 throw "Could not parse the soft-delete duration for gs://$ProjectBucket."
             }
         }
-        if ($SoftDeleteSeconds -gt 0) { throw "Soft delete remains enabled on gs://$ProjectBucket." }
+        $SoftDeletedObjects = @()
+        if ($PreClearSoftDeleteSeconds -gt 0) {
+            $SoftDeletedObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode soft_deleted)
+        }
+        gcloud storage buckets update "gs://$ProjectBucket" --project=$ExpectedProjectId --clear-soft-delete
+        Assert-LastGcloudSuccess -Operation "soft-delete disablement for gs://$ProjectBucket"
+        if ($SoftDeletedObjects.Count -gt 0) {
+            throw "Soft-deleted objects exist in gs://$ProjectBucket."
+        }
+        $BucketState = Get-ExactStorageBucketState -BucketName $ProjectBucket
+        $PostUpdateSoftDeletePolicy = $BucketState.PSObject.Properties['softDeletePolicy']
+        $PostUpdateRetentionDuration = if ($null -eq $PostUpdateSoftDeletePolicy -or $null -eq $PostUpdateSoftDeletePolicy.Value) {
+            $null
+        } else {
+            $PostUpdateSoftDeletePolicy.Value.PSObject.Properties['retentionDurationSeconds']
+        }
+        $PostUpdateSoftDeleteSeconds = [int64]0
+        if (
+            $null -ne $PostUpdateRetentionDuration -and
+            -not [int64]::TryParse([string]$PostUpdateRetentionDuration.Value, [ref]$PostUpdateSoftDeleteSeconds)
+        ) { throw "Could not parse the disabled soft-delete duration for gs://$ProjectBucket." }
+        if ($PostUpdateSoftDeleteSeconds -gt 0) { throw "Soft delete remains enabled on gs://$ProjectBucket." }
 
-        $CurrentObjectJson = @(& gcloud storage objects list "gs://$ProjectBucket" --format=json 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "Could not enumerate current objects in gs://$ProjectBucket." }
-        try {
-            $CurrentObjects = @(($CurrentObjectJson -join "`n") | ConvertFrom-JsonPreservingStrings)
-        } catch { throw "Could not parse current-object inventory for gs://$ProjectBucket." }
-        $AllVersionJson = @(& gcloud storage objects list "gs://$ProjectBucket" --all-versions --format=json 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "Could not enumerate all object versions in gs://$ProjectBucket." }
-        try {
-            $AllVersionObjects = @(($AllVersionJson -join "`n") | ConvertFrom-JsonPreservingStrings)
-        } catch { throw "Could not parse all-version inventory for gs://$ProjectBucket." }
-        $SoftDeletedJson = @(& gcloud storage objects list "gs://$ProjectBucket" --soft-deleted --exhaustive --format=json 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "Could not exhaustively enumerate soft-deleted objects in gs://$ProjectBucket." }
-        try {
-            $SoftDeletedObjects = @(($SoftDeletedJson -join "`n") | ConvertFrom-JsonPreservingStrings)
-        } catch { throw "Could not parse soft-deleted-object inventory for gs://$ProjectBucket." }
+        $CurrentObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode current)
+        $AllVersionObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode all_versions)
         $CurrentObjectReceipts = @(ConvertTo-SanitizedObjectInventory -BucketName $ProjectBucket -CloudObjects $CurrentObjects)
         $AllVersionObjectReceipts = @(ConvertTo-SanitizedObjectInventory -BucketName $ProjectBucket -CloudObjects $AllVersionObjects)
         $SoftDeletedObjectReceipts = @(ConvertTo-SanitizedObjectInventory -BucketName $ProjectBucket -CloudObjects $SoftDeletedObjects)
-        $NormalBytes = [int64](($AllVersionObjectReceipts | Measure-Object -Property size_bytes -Sum).Sum)
-        $SoftDeletedBytes = [int64](($SoftDeletedObjectReceipts | Measure-Object -Property size_bytes -Sum).Sum)
+        $NormalBytes = [int64]0
+        foreach ($ObjectReceipt in $AllVersionObjectReceipts) { $NormalBytes += [int64]$ObjectReceipt.size_bytes }
+        $SoftDeletedBytes = [int64]0
+        foreach ($ObjectReceipt in $SoftDeletedObjectReceipts) { $SoftDeletedBytes += [int64]$ObjectReceipt.size_bytes }
         if ((Get-CanonicalJsonHash -InputObject $CurrentObjectReceipts) -ne (Get-CanonicalJsonHash -InputObject $AllVersionObjectReceipts)) {
             throw "Noncurrent object versions exist in gs://$ProjectBucket; remove and re-audit them before deployment."
         }
@@ -1062,7 +1157,7 @@ function Assert-ProjectStorageBound {
             soft_deleted_object_count = $SoftDeletedObjectReceipts.Count
             versioning_enabled = $false
             retention_policy_seconds = 0
-            soft_delete_seconds = $SoftDeleteSeconds
+            soft_delete_seconds = 0
             current_object_inventory_sha256 = Get-CanonicalJsonHash -InputObject $CurrentObjectReceipts
             all_version_object_inventory_sha256 = Get-CanonicalJsonHash -InputObject $AllVersionObjectReceipts
             soft_deleted_object_inventory_sha256 = Get-CanonicalJsonHash -InputObject $SoftDeletedObjectReceipts
@@ -1354,7 +1449,8 @@ function Write-ProjectStorageAuditReceipt {
     }
     $ArtifactRepositories = @($ArtifactRepositories | Sort-Object repository_uri)
     $ArtifactImages = @($ArtifactImages | Sort-Object @{ Expression = { "$($_.package)@$($_.digest)" } })
-    $ImageSizeBytes = [int64](($ArtifactImages | Measure-Object -Property size_bytes -Sum).Sum)
+    $ImageSizeBytes = [int64]0
+    foreach ($ArtifactImage in $ArtifactImages) { $ImageSizeBytes += [int64]$ArtifactImage.size_bytes }
     $ServicesToBind = if ($Phase -eq 'after_app_source_deploy') { @($AppService) } else { @($AppService, $SimulatorService) }
     $RevisionImages = @()
     foreach ($BoundService in $ServicesToBind) {

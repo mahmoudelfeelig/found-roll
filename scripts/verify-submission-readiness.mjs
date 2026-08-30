@@ -1101,7 +1101,7 @@ function validateDocumentationEvidence(rawByPath, failures) {
       continue;
     }
     if (/\bgcloud\s+auth\s+print-access-token(?=\s|$|\))/i.test(commandProjection)) {
-      if (!/^\$AccessTokenLines\s*=\s*@\(&\s*gcloud\s+auth\s+print-access-token\)$/i.test(commandProjection)) {
+      if (!/^\$(?:AccessTokenLines|SoftDeletedBucketAccessTokenLines|StorageObjectAccessTokenLines)\s*=\s*@\(&\s*gcloud\s+auth\s+print-access-token\)$/i.test(commandProjection)) {
         sensitiveGcloudViolations.push(`access token is not captured only in memory: ${statement}`);
       }
     }
@@ -1174,13 +1174,35 @@ function validateDocumentationEvidence(rawByPath, failures) {
   ).length;
   const exactStorageBucketHelperStart = deployment.indexOf("function Get-ExactStorageBucketState {");
   const exactStorageBucketHelperEnd = deployment.indexOf(
-    "function Assert-LastGcloudSuccess {",
+    "function Get-SoftDeletedProjectBuckets {",
     exactStorageBucketHelperStart,
   );
   const exactStorageBucketHelper = exactStorageBucketHelperStart >= 0 && exactStorageBucketHelperEnd > exactStorageBucketHelperStart
     ? deployment.slice(exactStorageBucketHelperStart, exactStorageBucketHelperEnd)
     : "";
   const exactStorageBucketFields = "fields=name%2CprojectNumber%2Clocation%2CiamConfiguration%2CsoftDeletePolicy%2Cversioning%2CretentionPolicy%2Clifecycle%2Cmetageneration";
+  const softDeletedBucketHelperStart = exactStorageBucketHelperEnd;
+  const softDeletedBucketHelperEnd = deployment.indexOf(
+    "function Get-StorageObjectInventory {",
+    softDeletedBucketHelperStart,
+  );
+  const softDeletedBucketHelper = softDeletedBucketHelperStart >= 0 && softDeletedBucketHelperEnd > softDeletedBucketHelperStart
+    ? deployment.slice(softDeletedBucketHelperStart, softDeletedBucketHelperEnd)
+    : "";
+  const storageObjectHelperStart = softDeletedBucketHelperEnd;
+  const storageObjectHelperEnd = deployment.indexOf(
+    "function Assert-LastGcloudSuccess {",
+    storageObjectHelperStart,
+  );
+  const storageObjectHelper = storageObjectHelperStart >= 0 && storageObjectHelperEnd > storageObjectHelperStart
+    ? deployment.slice(storageObjectHelperStart, storageObjectHelperEnd)
+    : "";
+  const softDeletedObjectInventoryIndex = deployment.indexOf(
+    "Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode soft_deleted",
+  );
+  const clearSoftDeleteIndex = deployment.indexOf(
+    'gcloud storage buckets update "gs://$ProjectBucket" --project=$ExpectedProjectId --clear-soft-delete',
+  );
   const preservingJsonParserCount = (deployment.match(/^function\s+ConvertFrom-JsonPreservingStrings\s*\{/gmi) || []).length;
   const preservingJsonVersionGateCount = (deployment.match(/\$PSVersionTable\.PSVersion\s+-lt\s+\[version\]'7\.5'/g) || []).length;
   const preservingJsonCapabilityCheckCount = (deployment.match(/Parameters\.ContainsKey\('DateKind'\)/g) || []).length;
@@ -1238,7 +1260,41 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !exactStorageBucketHelper.includes("$AccessToken = $null")
     || !exactStorageBucketHelper.includes("$AccessTokenLines = @()")
     || !deployment.includes("[string]$BucketState.projectNumber -ne $ExpectedProjectNumber")
-    || exactStorageBucketStateCallCount !== 2
+    || exactStorageBucketStateCallCount !== 3
+    || !softDeletedBucketHelper.includes("$SoftDeletedBucketAccessTokenLines = @(& gcloud auth print-access-token)")
+    || !softDeletedBucketHelper.includes('Authorization = "Bearer $SoftDeletedBucketAccessToken"')
+    || !softDeletedBucketHelper.includes("'x-goog-user-project' = $ExpectedProjectId")
+    || !softDeletedBucketHelper.includes(
+      "storage.googleapis.com/storage/v1/b?project=$([uri]::EscapeDataString($ExpectedProjectId))&softDeleted=true&maxResults=1000&projection=noAcl&fields=items(name%2CprojectNumber)%2CnextPageToken",
+    )
+    || !softDeletedBucketHelper.includes('$BucketsUri += "&pageToken=$([uri]::EscapeDataString($PageToken))"')
+    || !softDeletedBucketHelper.includes("$SoftDeletedBucketsPage.PSObject.Properties['nextPageToken']")
+    || !softDeletedBucketHelper.includes("$SoftDeletedBucketHeaders.Clear()")
+    || !softDeletedBucketHelper.includes("$SoftDeletedBucketAccessToken = $null")
+    || !softDeletedBucketHelper.includes("$SoftDeletedBucketAccessTokenLines = @()")
+    || !deployment.includes("$SoftDeletedProjectBuckets = @(Get-SoftDeletedProjectBuckets -ExpectedProjectId $ExpectedProjectId)")
+    || /gcloud\s+storage\s+ls\s+--buckets\s+--soft-deleted/i.test(deployment)
+    || !storageObjectHelper.includes("$StorageObjectAccessTokenLines = @(& gcloud auth print-access-token)")
+    || !storageObjectHelper.includes("[ValidateSet('current', 'all_versions', 'soft_deleted')][string]$Mode")
+    || !storageObjectHelper.includes('Authorization = "Bearer $StorageObjectAccessToken"')
+    || !storageObjectHelper.includes("'x-goog-user-project' = $ExpectedProjectId")
+    || !storageObjectHelper.includes(
+      "storage.googleapis.com/storage/v1/b/${EncodedBucketName}/o?maxResults=1000&projection=noAcl&fields=items(name%2Cgeneration%2Csize)%2CnextPageToken",
+    )
+    || !storageObjectHelper.includes('if ($Mode -eq \'all_versions\') { $ObjectsUri += "&versions=true" }')
+    || !storageObjectHelper.includes('if ($Mode -eq \'soft_deleted\') { $ObjectsUri += "&softDeleted=true" }')
+    || !storageObjectHelper.includes('$ObjectsUri += "&pageToken=$([uri]::EscapeDataString($StorageObjectPageToken))"')
+    || !storageObjectHelper.includes("$StorageObjectsPage.PSObject.Properties['nextPageToken']")
+    || !storageObjectHelper.includes("$StorageObjectHeaders.Clear()")
+    || !storageObjectHelper.includes("$StorageObjectAccessToken = $null")
+    || !storageObjectHelper.includes("$StorageObjectAccessTokenLines = @()")
+    || !deployment.includes("Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode current")
+    || !deployment.includes("Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode all_versions")
+    || softDeletedObjectInventoryIndex < 0
+    || clearSoftDeleteIndex < 0
+    || softDeletedObjectInventoryIndex > clearSoftDeleteIndex
+    || !deployment.includes("if ($PreClearSoftDeleteSeconds -gt 0)")
+    || /gcloud\s+storage\s+objects\s+list/i.test(deployment)
     || /\$EvidenceBucketJson\s*=\s*gcloud\s+storage\s+buckets\s+describe/i.test(deployment)
     || /\$BucketState\s*=\s*gcloud\s+storage\s+buckets\s+describe/i.test(deployment)
     || cloudRunDeployCount === 0
@@ -1259,11 +1315,8 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || analysisLeaseSeconds >= queueMinimumBackoffSeconds
     || !/gcloud\s+secrets\s+versions\s+destroy/i.test(deployment)
     || !/gcloud\s+artifacts\s+docker\s+images\s+delete/i.test(deployment)
-    || !/gcloud\s+storage\s+objects\s+list/i.test(deployment)
-    || !/--buckets\s+--soft-deleted\s+--exhaustive\s+--full/i.test(deployment)
     || !/--soft-delete-duration=0/i.test(deployment)
     || !/--clear-soft-delete/i.test(deployment)
-    || !/--soft-deleted\s+--exhaustive/i.test(deployment)
     || !/softDeletePolicy/i.test(deployment)
     || !/Assert-ProjectStorageBound/i.test(deployment)
     || storageAuditReceiptCallCount !== cloudRunDeployCount
@@ -1276,7 +1329,6 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/ConvertTo-SanitizedObjectInventory/i.test(deployment)
     || !/all_version_objects/i.test(deployment)
     || !/object_id_sha256/i.test(deployment)
-    || !/--all-versions/i.test(deployment)
     || !/canonical_revision_images/i.test(deployment)
     || !/Non-Docker Artifact Registry repository/i.test(deployment)
     || !/function\s+Get-ProjectWideSecretDirectInventory\b/i.test(deployment)

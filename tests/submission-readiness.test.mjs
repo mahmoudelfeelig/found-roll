@@ -2253,6 +2253,160 @@ test("the deployment storage audit uses project-scoped Storage JSON metadata for
   ), "storage audit must compare exact project ownership");
 });
 
+test("the deployment storage audit lists soft-deleted buckets through paginated Storage JSON", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  await assertDeploymentRejected(deployment.replace(
+    "$SoftDeletedProjectBuckets = @(Get-SoftDeletedProjectBuckets -ExpectedProjectId $ExpectedProjectId)",
+    '$SoftDeletedBucketOutput = @(& gcloud storage ls --buckets --soft-deleted --exhaustive --full --project=$ExpectedProjectId 2>&1)',
+  ), "storage audit must use the Storage JSON soft-deleted-bucket helper");
+  await assertDeploymentRejected(deployment.replace(
+    "&softDeleted=true&maxResults=1000",
+    "&softDeleted=false&maxResults=1000",
+  ), "Storage JSON buckets.list must request soft-deleted buckets");
+  await assertDeploymentRejected(deployment.replace(
+    "?project=$([uri]::EscapeDataString($ExpectedProjectId))&softDeleted=true",
+    "?project=foreign-project&softDeleted=true",
+  ), "Storage JSON buckets.list must scope the exact project");
+  await assertDeploymentRejected(deployment.replace(
+    "items(name%2CprojectNumber)%2CnextPageToken",
+    "items(name%2CprojectNumber)",
+  ), "Storage JSON buckets.list must request the next-page token");
+  await assertDeploymentRejected(deployment.replace(
+    '$BucketsUri += "&pageToken=$([uri]::EscapeDataString($PageToken))"',
+    "# continuation page token was not sent",
+  ), "Storage JSON buckets.list must fetch continuation pages");
+  await assertDeploymentRejected(deployment.replace(
+    "$SoftDeletedBucketAccessTokenLines = @(& gcloud auth print-access-token)",
+    "$SoftDeletedBucketAccessTokenLines = @('literal-token')",
+  ), "soft-deleted bucket listing must obtain an in-memory access token");
+  await assertDeploymentRejected(deployment.replace(
+    'Authorization = "Bearer $SoftDeletedBucketAccessToken"',
+    'Authorization = "Bearer literal-token"',
+  ), "soft-deleted bucket listing must use its in-memory bearer token");
+  await assertDeploymentRejected(deployment.replace(
+    "'x-goog-user-project' = $ExpectedProjectId",
+    "'x-goog-user-project' = 'foreign-project'",
+  ), "soft-deleted bucket listing must quota-scope the exact project");
+  await assertDeploymentRejected(deployment.replace(
+    "        $SoftDeletedBucketHeaders.Clear()",
+    "        # soft-deleted bucket headers were not cleared",
+  ), "soft-deleted bucket listing must clear request headers");
+  await assertDeploymentRejected(deployment.replace(
+    "        $SoftDeletedBucketAccessToken = $null\n        $SoftDeletedBucketAccessTokenLines = @()",
+    "        # soft-deleted bucket access token was not cleared",
+  ), "soft-deleted bucket listing must clear its access token");
+  await assertDeploymentRejected(
+    `${deployment}\n\n\`gcloud storage ls --buckets --soft-deleted --exhaustive --full --project=$ExpectedProjectId\`\n`,
+    "legacy gcloud soft-deleted bucket enumeration must stay banned",
+  );
+});
+
+test("the deployment storage audit uses paginated Storage JSON object modes around soft-delete disablement", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+  const currentInventoryCall = "$CurrentObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode current)";
+  const allVersionsInventoryCall = "$AllVersionObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode all_versions)";
+  const softDeletedInventoryCall = "$SoftDeletedObjects = @(Get-StorageObjectInventory -BucketName $ProjectBucket -ExpectedProjectId $ExpectedProjectId -Mode soft_deleted)";
+  const conditionalSoftDeletedInventory = `$SoftDeletedObjects = @()
+        if ($PreClearSoftDeleteSeconds -gt 0) {
+            ${softDeletedInventoryCall}
+        }`;
+  const clearSoftDeleteCommand = 'gcloud storage buckets update "gs://$ProjectBucket" --project=$ExpectedProjectId --clear-soft-delete';
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  await assertDeploymentRejected(deployment.replace(
+    currentInventoryCall,
+    '$CurrentObjectJson = @(& gcloud storage objects list "gs://$ProjectBucket" --format=json 2>&1)',
+  ), "current object inventory must use the Storage JSON helper");
+  await assertDeploymentRejected(deployment.replace(
+    allVersionsInventoryCall,
+    '$AllVersionJson = @(& gcloud storage objects list "gs://$ProjectBucket" --all-versions --format=json 2>&1)',
+  ), "all-version object inventory must use the Storage JSON helper");
+  await assertDeploymentRejected(deployment.replace(
+    "[ValidateSet('current', 'all_versions', 'soft_deleted')][string]$Mode",
+    "[ValidateSet('current', 'all_versions')][string]$Mode",
+  ), "Storage JSON object inventory must expose all three explicit modes");
+  await assertDeploymentRejected(deployment.replace(
+    "https://storage.googleapis.com/storage/v1/b/${EncodedBucketName}/o?",
+    "https://storage.googleapis.com/storage/v1/b/${EncodedBucketName}?",
+  ), "Storage JSON object inventory must use the objects.list endpoint");
+  await assertDeploymentRejected(deployment.replace(
+    '$ObjectsUri += "&versions=true"',
+    '$ObjectsUri += "&versions=false"',
+  ), "all-version mode must request versions=true");
+  await assertDeploymentRejected(deployment.replace(
+    '$ObjectsUri += "&softDeleted=true"',
+    '$ObjectsUri += "&softDeleted=false"',
+  ), "soft-deleted mode must request softDeleted=true");
+  await assertDeploymentRejected(deployment.replace(
+    "fields=items(name%2Cgeneration%2Csize)%2CnextPageToken",
+    "fields=items(name%2Cgeneration%2Csize)",
+  ), "Storage JSON object inventory must request the next-page token");
+  await assertDeploymentRejected(deployment.replace(
+    '$ObjectsUri += "&pageToken=$([uri]::EscapeDataString($StorageObjectPageToken))"',
+    "# continuation object page token was not sent",
+  ), "Storage JSON object inventory must fetch continuation pages");
+  await assertDeploymentRejected(deployment.replace(
+    "$StorageObjectsPage.PSObject.Properties['nextPageToken']",
+    "$null",
+  ), "Storage JSON object inventory must consume continuation page tokens");
+  await assertDeploymentRejected(deployment.replace(
+    "$StorageObjectAccessTokenLines = @(& gcloud auth print-access-token)",
+    "$StorageObjectAccessTokenLines = @('literal-token')",
+  ), "Storage JSON object inventory must obtain an in-memory access token");
+  await assertDeploymentRejected(deployment.replace(
+    'Authorization = "Bearer $StorageObjectAccessToken"',
+    'Authorization = "Bearer literal-token"',
+  ), "Storage JSON object inventory must use its in-memory bearer token");
+  await assertDeploymentRejected(deployment.replace(
+    "$StorageObjectHeaders = @{ Authorization = \"Bearer $StorageObjectAccessToken\"; 'x-goog-user-project' = $ExpectedProjectId }",
+    "$StorageObjectHeaders = @{ Authorization = \"Bearer $StorageObjectAccessToken\"; 'x-goog-user-project' = 'foreign-project' }",
+  ), "Storage JSON object inventory must quota-scope the exact project");
+  await assertDeploymentRejected(deployment.replace(
+    "        $StorageObjectHeaders.Clear()",
+    "        # Storage object headers were not cleared",
+  ), "Storage JSON object inventory must clear request headers");
+  await assertDeploymentRejected(deployment.replace(
+    "        $StorageObjectAccessToken = $null\n        $StorageObjectAccessTokenLines = @()",
+    "        # Storage object access token was not cleared",
+  ), "Storage JSON object inventory must clear its access token");
+  await assertDeploymentRejected(deployment.replace(
+    "if ($PreClearSoftDeleteSeconds -gt 0)",
+    "if ($PreClearSoftDeleteSeconds -ge 0)",
+  ), "zero soft-delete policy must not issue an invalid soft-deleted-object query");
+  await assertDeploymentRejected(deployment.replace(
+    `${conditionalSoftDeletedInventory}\n        ${clearSoftDeleteCommand}`,
+    `        ${clearSoftDeleteCommand}\n        ${conditionalSoftDeletedInventory}`,
+  ), "positive soft-delete policy must be inventoried before it is cleared");
+  await assertDeploymentRejected(deployment.replace(
+    conditionalSoftDeletedInventory,
+    softDeletedInventoryCall,
+  ), "zero soft-delete policy must retain an explicit empty soft-deleted inventory");
+  await assertDeploymentRejected(
+    `${deployment}\n\n\`gcloud storage objects list gs://foreign-bucket --all-versions --format=json\`\n`,
+    "gcloud storage objects list must stay banned for inventory",
+  );
+});
+
 test("the bound deployment runbook must retain the zero-money retry safeguards", async (t) => {
   const fixture = await createFixture(t);
   const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
