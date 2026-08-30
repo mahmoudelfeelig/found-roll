@@ -117,8 +117,8 @@ $FirestoreNamespace = "foundRoll_submission_v1_synthetic_demo"
 $Model = "gemini-3.5-flash"
 $StaffActorId = "staff.northport"
 $SupervisorActorId = "supervisor.northport"
-$AppUrl = "<exact-existing-app-cloud-run-status-url>"
-$SimulatorUrl = "<exact-existing-simulator-cloud-run-status-url>"
+$AppUrl = "https://$($AppService)-$($ProjectNumber).$($Region).run.app"
+$SimulatorUrl = "https://$($SimulatorService)-$($ProjectNumber).$($Region).run.app"
 $HostedClientOrigin = $AppUrl
 $DedicatedProjectLabelKey = [string]$ResourceIdentity.dedicated_project_label_key
 $DedicatedProjectLabelValue = [string]$ResourceIdentity.dedicated_project_label_value
@@ -292,7 +292,7 @@ function Resolve-RetainedRollbackRevisions {
 }
 ```
 
-Both service origins must be known before the first production revision starts. Use the exact stable `status.url` values returned by the two Cloud Run service resources in this dedicated project. Do not deploy a production app with the localhost default and plan to patch `FOUND_ROLL_PUBLIC_BASE_URL` afterward: production validation rejects that revision before it can become ready, and the Cloud Tasks audience would be wrong. On a genuinely new project, a two-stage bootstrap may create the service names in an explicitly non-production configuration solely to discover their stable `run.app` URLs; label those revisions noncanonical, send them no claimant data, then deploy the production revisions in the compatibility order below. Never record the bootstrap as Google Cloud evidence.
+Both service origins must be fixed before the first production revision starts. Cloud Run's [documented deterministic service URL](https://cloud.google.com/run/docs/triggering/https-request#deterministic_url) is `https://SERVICE_NAME-PROJECT_NUMBER.REGION.run.app`; both Found Roll DNS segments are below the 63-character limit, so the variables above derive their exact first-deploy origins from the tracked service names, project number, and region. Do not create a bootstrap revision merely to discover a URL, and do not deploy with the localhost default and plan to patch `FOUND_ROLL_PUBLIC_BASE_URL` afterward: production validation rejects that revision before it can become ready, and the Cloud Tasks audience would be wrong. After each source deployment, require the authoritative Cloud Run `status.url` to equal the corresponding derived origin before continuing.
 
 Authenticate an operator account with permission to create the resources below and set the project:
 

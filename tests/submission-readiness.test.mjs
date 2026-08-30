@@ -2165,6 +2165,43 @@ test("setup instructions and the architecture render must be substantive artifac
   assert.equal(codes.has("ARCHITECTURE_BINDING"), true);
 });
 
+test("the deployment runbook derives Cloud Run origins without URL-discovery revisions", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+  const appUrlDeclaration = '$AppUrl = "https://$($AppService)-$($ProjectNumber).$($Region).run.app"';
+  const simulatorUrlDeclaration = '$SimulatorUrl = "https://$($SimulatorService)-$($ProjectNumber).$($Region).run.app"';
+
+  assert.equal(deployment.includes(appUrlDeclaration), true);
+  assert.equal(deployment.includes(simulatorUrlDeclaration), true);
+  assert.equal(/<exact-existing-(?:app|simulator)-cloud-run-status-url>/i.test(deployment), false);
+  assert.equal(/two-stage bootstrap/i.test(deployment), false);
+  assert.equal(/Do not create a bootstrap revision merely to discover a URL/i.test(deployment), true);
+
+  const assertDeploymentRejected = async (mutatedDeployment) => {
+    assert.notEqual(mutatedDeployment, deployment);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true);
+  };
+
+  await assertDeploymentRejected(deployment.replace(
+    appUrlDeclaration,
+    '$AppUrl = "https://found-roll-app-1061926987746.us-central1.run.app"',
+  ));
+  await assertDeploymentRejected(deployment.replace(
+    simulatorUrlDeclaration,
+    '$SimulatorUrl = "https://found-roll-simulator-1061926987746.us-central1.run.app"',
+  ));
+  await assertDeploymentRejected(`${deployment}\n\nLegacy app origin: \`<exact-existing-app-cloud-run-status-url>\`\n`);
+  await assertDeploymentRejected(`${deployment}\n\nLegacy simulator origin: \`<exact-existing-simulator-cloud-run-status-url>\`\n`);
+  await assertDeploymentRejected(deployment.replace(
+    "Do not create a bootstrap revision merely to discover a URL",
+    "On a new project, use a two-stage bootstrap to create noncanonical revisions solely to discover both URLs",
+  ));
+});
+
 test("the bound deployment runbook must retain the zero-money retry safeguards", async (t) => {
   const fixture = await createFixture(t);
   const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");

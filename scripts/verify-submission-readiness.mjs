@@ -1167,6 +1167,8 @@ function validateDocumentationEvidence(rawByPath, failures) {
     '-Uri "https://cloudresourcemanager.googleapis.com/v3/projects/${ProjectNumber}?updateMask=labels"',
   );
   const projectLabelVerificationIndex = deployment.indexOf("$ProjectLabelVerified = $false");
+  const deterministicAppUrlDeclaration = '$AppUrl = "https://$($AppService)-$($ProjectNumber).$($Region).run.app"';
+  const deterministicSimulatorUrlDeclaration = '$SimulatorUrl = "https://$($SimulatorService)-$($ProjectNumber).$($Region).run.app"';
   const preservingJsonParserCount = (deployment.match(/^function\s+ConvertFrom-JsonPreservingStrings\s*\{/gmi) || []).length;
   const preservingJsonVersionGateCount = (deployment.match(/\$PSVersionTable\.PSVersion\s+-lt\s+\[version\]'7\.5'/g) || []).length;
   const preservingJsonCapabilityCheckCount = (deployment.match(/Parameters\.ContainsKey\('DateKind'\)/g) || []).length;
@@ -1208,6 +1210,11 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/billing_account_name_sha256/i.test(deployment)
     || !/entrant_attestation_confirmed/i.test(deployment)
     || !/billing_account_open_cli_observed/i.test(deployment)
+    || !deployment.includes(deterministicAppUrlDeclaration)
+    || !deployment.includes(deterministicSimulatorUrlDeclaration)
+    || /<exact-existing-(?:app|simulator)-cloud-run-status-url>/i.test(deployment)
+    || /two-stage bootstrap/i.test(deployment)
+    || !/documented deterministic service URL/i.test(deployment)
     || cloudRunDeployCount === 0
     || gatedCloudRunDeployCount !== cloudRunDeployCount
     || projectPinnedCloudRunDeployCount !== cloudRunDeployCount
