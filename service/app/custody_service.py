@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from .agent import CaseAnalyst
 from .config import Settings
+from .correlation import get_or_create_correlation_id
 from .domain import (
     AppliedMutation,
     Candidate,
@@ -645,7 +646,14 @@ class CustodyService:
         if case.state == CustodyState.ANALYZING:
             candidates = self.repository.list_candidates()
             try:
-                run_id, proposal = self.analyst.analyze(case, candidates)
+                analysis_result = self.analyst.analyze(case, candidates)
+                if len(analysis_result) == 3:
+                    run_id, proposal, execution = analysis_result
+                else:
+                    # Test doubles that predate identifier-only execution evidence
+                    # remain valid outside canonical Vertex mode.
+                    run_id, proposal = analysis_result
+                    execution = None
                 authorized_ids = {candidate.id for candidate in candidates}
                 if set(proposal.ranked_candidate_ids) - authorized_ids:
                     raise Conflict("agent_scope_violation", "The analyst referenced an unauthorized candidate.")
@@ -679,8 +687,18 @@ class CustodyService:
                     "selected_item_id": proposal.selected_candidate_id,
                     "next_question": proposal.next_question,
                     "model_run_id": run_id,
+                    "model_trace_id": execution.trace_id if execution is not None else None,
                     "model_name": self.analyst.model_name,
                     "model_mode": self.analyst.mode,
+                    "model_invocation_count": (
+                        execution.invocation_count if execution is not None else None
+                    ),
+                    "model_tool_trajectory": (
+                        execution.tool_trajectory if execution is not None else []
+                    ),
+                    "model_typed_output_valid": (
+                        execution.typed_output_valid if execution is not None else False
+                    ),
                 },
                 tool="case_analyst.submit_observations",
                 task_id=outbox.task_name,
@@ -1164,6 +1182,7 @@ class CustodyService:
             updated_handoff = handoff.model_copy(
                 update={
                     "reservation_id": attestation.reservation_id,
+                    "simulator_request_id": get_or_create_correlation_id(),
                     "status": HandoffStatus.HELD,
                     "remote_etag": attestation.remote_etag,
                     "remote_version": attestation.remote_version,
@@ -1184,6 +1203,7 @@ class CustodyService:
             updated_handoff = handoff.model_copy(
                 update={
                     "status": HandoffStatus.RELEASED,
+                    "simulator_request_id": get_or_create_correlation_id(),
                     "remote_etag": attestation.remote_etag,
                     "remote_version": attestation.remote_version,
                 }

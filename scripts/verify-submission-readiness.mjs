@@ -34,6 +34,7 @@ const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const projectNumberPattern = /^\d{6,20}$/;
 const bucketNamePattern = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
+const weakSimulatorEtagPattern = /^W\/"sim-[a-z0-9][a-z0-9-]{2,180}-v[1-9]\d*"$/;
 const expectedGoogleCloudResourceIdentity = Object.freeze({
   schema_version: "1",
   kind: "found-roll-google-cloud-resource-identity",
@@ -3252,9 +3253,15 @@ function validateRunReceipt(receipt, binding, releaseRecord, preparationReceipt,
     "callback_replay_outcome",
     "callback_replay_side_effect_delta",
   ], failures)) {
-    for (const key of ["firestore_namespace", "evidence_bucket", "task_name", "simulator_request_id", "reservation_id", "attestation_id", "simulator_etag", "callback_replay_outcome"]) {
+    for (const key of ["firestore_namespace", "evidence_bucket", "task_name", "simulator_request_id", "reservation_id", "attestation_id", "callback_replay_outcome"]) {
       requireReceiptIdentifier(receipt.cloud_boundary, key, `${base}.cloud_boundary`, failures);
     }
+    requireIdentifier(
+      receipt.cloud_boundary.simulator_etag,
+      `${base}.cloud_boundary.simulator_etag`,
+      failures,
+      weakSimulatorEtagPattern,
+    );
     for (const key of ["firestore_transaction_contention_verified", "evidence_generations_verified", "task_oidc_verified", "production_payload_omitted", "simulator_https_verified", "simulator_api_auth_verified", "callback_signature_verified"]) {
       requireTrue(receipt.cloud_boundary[key], `${base}.cloud_boundary.${key}`, failures);
     }
@@ -3752,11 +3759,11 @@ function validateCanonicalRunSet(runBindings, preparationReceipts, runReceipts, 
     .sort((left, right) => left.ordinal - right.ordinal);
   let previousEnd = null;
   for (const item of chronological) {
-    if (![item.prepared, item.started, item.ended].every(Number.isFinite) || !(item.prepared < item.started && item.started < item.ended)) {
-      addFailure(failures, "CANONICAL_RUN_TIME", "Every canonical preparation must precede its run start and end.");
+    if (![item.prepared, item.started, item.ended].every(Number.isFinite) || !(item.started < item.prepared && item.prepared < item.ended)) {
+      addFailure(failures, "CANONICAL_RUN_TIME", "Every canonical run must start before preparation and end after preparation.");
       break;
     }
-    if (previousEnd !== null && item.prepared <= previousEnd) {
+    if (previousEnd !== null && item.started <= previousEnd) {
       addFailure(failures, "CANONICAL_RUN_TIME", "Canonical runs must be non-overlapping and chronologically ordered by ordinal.");
       break;
     }

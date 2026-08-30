@@ -143,6 +143,32 @@ class EvidenceRecord(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class AgentToolOutcome(BaseModel):
+    """Sanitized evidence from one observed ADK function response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Literal[
+        "search_custodian",
+        "load_candidate",
+        "submit_observations",
+        "propose_discriminator",
+        "request_manual_review",
+    ]
+    outcome: Literal["success", "denied", "abstained", "unavailable"]
+
+
+class AgentExecutionEvidence(BaseModel):
+    """Identifier-only execution evidence safe to persist with the passport."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trace_id: str = Field(min_length=1, max_length=200)
+    invocation_count: int = Field(ge=1, le=8)
+    tool_trajectory: list[AgentToolOutcome] = Field(min_length=1, max_length=12)
+    typed_output_valid: bool
+
+
 class Candidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -191,8 +217,12 @@ class CaseRecord(BaseModel):
     policy_version: str = "found-roll-release-v1"
     handoff_id: str | None = None
     model_run_id: str | None = None
+    model_trace_id: str | None = None
     model_name: str | None = None
     model_mode: str | None = None
+    model_invocation_count: int | None = Field(default=None, ge=0, le=8)
+    model_tool_trajectory: list[AgentToolOutcome] = Field(default_factory=list, max_length=12)
+    model_typed_output_valid: bool = False
     last_event_hash: str = "0" * 64
     last_event_sequence: int = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -279,6 +309,7 @@ class HandoffRecord(BaseModel):
     item_id: str
     provider: str = "Relay Post (SIMULATED)"
     reservation_id: str | None = None
+    simulator_request_id: str | None = None
     status: HandoffStatus = HandoffStatus.PENDING
     reservation_case_version: int = Field(ge=1)
     remote_etag: str
@@ -495,8 +526,12 @@ class CaseView(BaseModel):
     policy_version: str
     handoff_id: str | None
     model_run_id: str | None
+    model_trace_id: str | None
     model_name: str | None
     model_mode: str | None
+    model_invocation_count: int | None
+    model_tool_trajectory: list[AgentToolOutcome]
+    model_typed_output_valid: bool
     event_count: int
     created_at: datetime
     updated_at: datetime
@@ -527,8 +562,12 @@ class CaseView(BaseModel):
             policy_version=case.policy_version,
             handoff_id=case.handoff_id,
             model_run_id=case.model_run_id,
+            model_trace_id=case.model_trace_id,
             model_name=case.model_name,
             model_mode=case.model_mode,
+            model_invocation_count=case.model_invocation_count,
+            model_tool_trajectory=case.model_tool_trajectory,
+            model_typed_output_valid=case.model_typed_output_valid,
             event_count=case.last_event_sequence,
             created_at=case.created_at,
             updated_at=case.updated_at,
@@ -596,6 +635,7 @@ class HandoffView(BaseModel):
     item_id: str
     provider: str
     reservation_id: str | None
+    simulator_request_id: str | None
     status: HandoffStatus
     reservation_case_version: int = Field(ge=1)
     remote_etag: str
@@ -615,6 +655,7 @@ class HandoffView(BaseModel):
             item_id=handoff.item_id,
             provider=handoff.provider,
             reservation_id=handoff.reservation_id,
+            simulator_request_id=handoff.simulator_request_id,
             status=handoff.status,
             reservation_case_version=handoff.reservation_case_version,
             remote_etag=handoff.remote_etag,

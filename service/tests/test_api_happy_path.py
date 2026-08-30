@@ -9,7 +9,10 @@ import pytest
 from app.agent import VertexAdkCaseAnalyst
 from app.custody_service import ANALYSIS_EXECUTION_LEASE
 from app.domain import (
+    AgentExecutionEvidence,
+    AgentToolOutcome,
     AnalysisProposal,
+    CaseRecord,
     OpaqueTaskPayload,
     OutboxFailureStage,
     OutboxStatus,
@@ -172,6 +175,63 @@ def test_duplicate_analysis_task_creates_no_duplicate_event(client, case_id):
     assert second.status_code == 200
     assert second.json()["replayed"] is True
     assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == first_count
+
+
+def test_live_execution_evidence_survives_storage_shape_and_case_view(client, app, case_id):
+    started = client.post(
+        f"/api/v1/passports/{case_id}/analysis-jobs",
+        json={"expected_version": 1, "idempotency_key": "analysis-evidence-persistence-001"},
+    )
+    assert started.status_code == 200, started.text
+    delegate = app.state.custody_service.analyst
+
+    class EvidenceAnalyst:
+        mode = "vertex_adk"
+        model_name = "gemini-3.5-flash"
+        prompt_version = delegate.prompt_version
+        output_schema_version = delegate.output_schema_version
+
+        @staticmethod
+        def analyze(case, candidates):
+            _fixture_run_id, proposal = delegate.analyze(case, candidates)
+            return (
+                "adk-run-evidence-persistence",
+                proposal,
+                AgentExecutionEvidence(
+                    trace_id="adk-invocation-evidence-persistence",
+                    invocation_count=3,
+                    tool_trajectory=[
+                        AgentToolOutcome(name="search_custodian", outcome="success"),
+                        AgentToolOutcome(name="load_candidate", outcome="success"),
+                        AgentToolOutcome(name="submit_observations", outcome="success"),
+                        AgentToolOutcome(name="propose_discriminator", outcome="success"),
+                    ],
+                    typed_output_valid=True,
+                ),
+            )
+
+    app.state.custody_service.analyst = EvidenceAnalyst()
+    completed = client.post("/tasks/outbox", json=started.json()["task"]["payload"])
+    assert completed.status_code == 200, completed.text
+
+    expected_trajectory = [
+        {"name": "search_custodian", "outcome": "success"},
+        {"name": "load_candidate", "outcome": "success"},
+        {"name": "submit_observations", "outcome": "success"},
+        {"name": "propose_discriminator", "outcome": "success"},
+    ]
+    case_view = client.get(f"/api/v1/passports/{case_id}").json()["case"]
+    assert case_view["model_run_id"] == "adk-run-evidence-persistence"
+    assert case_view["model_trace_id"] == "adk-invocation-evidence-persistence"
+    assert case_view["model_invocation_count"] == 3
+    assert case_view["model_tool_trajectory"] == expected_trajectory
+    assert case_view["model_typed_output_valid"] is True
+
+    stored = app.state.custody_service.repository.get_case(case_id)
+    firestore_shape = stored.model_dump(mode="python")
+    restored = CaseRecord.model_validate(firestore_shape)
+    assert restored.model_trace_id == "adk-invocation-evidence-persistence"
+    assert [entry.model_dump(mode="json") for entry in restored.model_tool_trajectory] == expected_trajectory
 
 
 def test_concurrent_analysis_deliveries_call_the_analyst_exactly_once(client, app, case_id):

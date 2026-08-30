@@ -5,10 +5,10 @@
   "finding_count": 0,
   "finding_values_included": false,
   "findings_by_rule": {},
-  "manifest_sha256": "d89474ff060a97ee5358753d834389315d9ab2abbe567fcf8be3df6328f002f9",
+  "manifest_sha256": "0def9fe87d78d6f92d99e11a96a33f4c2254956191f05cd915c8bf7225e817a2",
   "pattern_count": 0,
   "recorded_findings": [],
-  "scanned_byte_count": 288275,
+  "scanned_byte_count": 304511,
   "scanned_file_count": 19,
   "schema_version": "1.0",
   "scope": [

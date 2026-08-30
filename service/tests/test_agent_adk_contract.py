@@ -1,10 +1,23 @@
 from importlib.metadata import version
+from types import SimpleNamespace
 
 import pytest
 from google.adk.agents.invocation_context import InvocationContext, LlmCallsLimitExceededError
-from google.genai.types import Part
+from google.adk.events import Event
+from google.genai.types import (
+    Content,
+    FunctionCall,
+    FunctionResponse,
+    GenerateContentResponseUsageMetadata,
+    Part,
+)
 
-from app.agent import VertexAdkCaseAnalyst, deterministic_candidate_packet
+from app.agent import (
+    VertexAdkCaseAnalyst,
+    _observed_execution_evidence,
+    _tool_outcome,
+    deterministic_candidate_packet,
+)
 from app.agent_contract import CASE_ANALYST_INSTRUCTION, CASE_ANALYST_PROMPT_VERSION
 from app.domain import (
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
@@ -63,6 +76,124 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     analyst._configure_vertex_environment()
     assert __import__("os").environ["GOOGLE_GENAI_USE_ENTERPRISE"] == "TRUE"
     assert __import__("os").environ["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+
+
+def test_adk_events_become_sanitized_bound_execution_evidence():
+    ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
+    selected = ranked[0]
+    proposal = AnalysisProposal(
+        ranked_candidate_ids=[item.id for item in ranked],
+        selected_candidate_id=selected.id,
+        visible_signals=selected.public_signals,
+        evidence_sufficient_for_claim=False,
+        restricted_attribute_id=selected.restricted_attribute_id,
+        next_question="What are the final four characters on the lens serial label?",
+        tool_trajectory=["untrusted-model-reported-value"],
+    )
+
+    calls = [
+        FunctionCall(id="call-search-metro", name="search_custodian", args={"tenant_id": "metro-loop"}),
+        FunctionCall(id="call-search-air", name="search_custodian", args={"tenant_id": "northport-air"}),
+        FunctionCall(id="call-load", name="load_candidate", args={"candidate_id": selected.id}),
+        FunctionCall(
+            id="call-submit",
+            name="submit_observations",
+            args={"candidate_id": selected.id, "visible_signals": selected.public_signals},
+        ),
+        FunctionCall(
+            id="call-question",
+            name="propose_discriminator",
+            args={
+                "candidate_id": selected.id,
+                "attribute_id": selected.restricted_attribute_id,
+                "question": proposal.next_question,
+            },
+        ),
+    ]
+    responses = [
+        FunctionResponse(id=call.id, name=call.name, response={"accepted": True})
+        for call in calls
+    ]
+    invocation_id = "adk-invocation-live-123"
+
+    def adk_event(event_id, *, calls=(), responses=(), usage=False):
+        parts = [Part(function_call=call) for call in calls]
+        parts.extend(Part(function_response=response) for response in responses)
+        return Event(
+            id=event_id,
+            invocation_id=invocation_id,
+            author="case_analyst",
+            content=Content(role="model", parts=parts) if parts else None,
+            usage_metadata=(
+                GenerateContentResponseUsageMetadata(
+                    prompt_token_count=1,
+                    candidates_token_count=1,
+                    total_token_count=2,
+                )
+                if usage
+                else None
+            ),
+        )
+
+    evidence = _observed_execution_evidence(
+        events=[
+            adk_event("llm-1", calls=calls[:3], usage=True),
+            adk_event("tools-1", responses=responses[:3]),
+            adk_event("llm-2", calls=calls[3:], usage=True),
+            adk_event("tools-2", responses=responses[3:]),
+            adk_event("llm-final", usage=True),
+        ],
+        ranked_candidates=ranked,
+        proposal=proposal,
+    )
+
+    assert evidence.trace_id == invocation_id
+    assert evidence.invocation_count == 3
+    assert [entry.name for entry in evidence.tool_trajectory] == [call.name for call in calls]
+    assert {entry.outcome for entry in evidence.tool_trajectory} == {"success"}
+    assert evidence.typed_output_valid is True
+    assert _tool_outcome({"accepted": False}) == "denied"
+    assert _tool_outcome({"error": "unavailable"}) == "unavailable"
+    assert _tool_outcome(
+        {"review_requested": True, "approved": False},
+        tool_name="request_manual_review",
+    ) == "abstained"
+
+
+def test_adk_execution_evidence_rejects_unpaired_tool_response():
+    ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
+    selected = ranked[0]
+    proposal = AnalysisProposal(
+        ranked_candidate_ids=[item.id for item in ranked],
+        selected_candidate_id=selected.id,
+        visible_signals=selected.public_signals,
+        evidence_sufficient_for_claim=False,
+        restricted_attribute_id=selected.restricted_attribute_id,
+        next_question="What are the final four characters on the lens serial label?",
+        tool_trajectory=["untrusted"],
+    )
+
+    class PairingEvent:
+        id = "llm-1"
+        invocation_id = "adk-invocation-live-456"
+        usage_metadata = object()
+
+        @staticmethod
+        def get_function_calls():
+            return [SimpleNamespace(id="call-1", name="search_custodian", args={"tenant_id": "metro-loop"})]
+
+        @staticmethod
+        def get_function_responses():
+            return [SimpleNamespace(id="call-1", name="load_candidate", response={"accepted": True})]
+
+    with pytest.raises(Conflict) as raised:
+        _observed_execution_evidence(
+            events=[PairingEvent()],
+            ranked_candidates=ranked,
+            proposal=proposal,
+        )
+
+    assert raised.value.code == "agent_tool_pairing_invalid"
 
 
 def test_adk_llm_call_ceiling_is_translated_to_terminal_unavailability(monkeypatch):

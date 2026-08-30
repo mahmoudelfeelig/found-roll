@@ -21,6 +21,8 @@ from .agent_contract import (
 )
 from .domain import (
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
+    AgentExecutionEvidence,
+    AgentToolOutcome,
     AnalysisProposal,
     Candidate,
     CaseRecord,
@@ -40,7 +42,14 @@ class CaseAnalyst(Protocol):
     prompt_version: str
     output_schema_version: str
 
-    def analyze(self, case: CaseRecord, candidates: list[Candidate]) -> tuple[str, AnalysisProposal]: ...
+    def analyze(
+        self,
+        case: CaseRecord,
+        candidates: list[Candidate],
+    ) -> (
+        tuple[str, AnalysisProposal]
+        | tuple[str, AnalysisProposal, AgentExecutionEvidence]
+    ): ...
 
 
 def deterministic_candidate_packet(case: CaseRecord, candidates: list[Candidate]) -> list[Candidate]:
@@ -78,7 +87,11 @@ class FixtureCaseAnalyst:
     prompt_version = "fixture-no-model"
     output_schema_version = ANALYSIS_PROPOSAL_SCHEMA_VERSION
 
-    def analyze(self, case: CaseRecord, candidates: list[Candidate]) -> tuple[str, AnalysisProposal]:
+    def analyze(
+        self,
+        case: CaseRecord,
+        candidates: list[Candidate],
+    ) -> tuple[str, AnalysisProposal]:
         ranked = deterministic_candidate_packet(case, candidates)
         selected = ranked[0]
         proposal = AnalysisProposal(
@@ -98,6 +111,177 @@ class FixtureCaseAnalyst:
             ],
         )
         return f"fixture-run-{uuid4().hex[:16]}", proposal
+
+
+def _tool_outcome(response: object, *, tool_name: str | None = None) -> str:
+    """Reduce a tool response to the only four publication-safe outcomes."""
+
+    if not isinstance(response, dict):
+        return "unavailable"
+    if response.get("error"):
+        return "unavailable"
+    if response.get("accepted") is False:
+        return "denied"
+    if tool_name == "request_manual_review" and response.get("review_requested") is True:
+        return "abstained"
+    return "success"
+
+
+def _observed_execution_evidence(
+    *,
+    events: list[object],
+    ranked_candidates: list[Candidate],
+    proposal: AnalysisProposal,
+) -> AgentExecutionEvidence:
+    """Build fail-closed evidence from ADK events without persisting arguments or results."""
+
+    allowed_tools = {
+        "search_custodian",
+        "load_candidate",
+        "submit_observations",
+        "propose_discriminator",
+        "request_manual_review",
+    }
+    calls_by_id: dict[str, tuple[str, dict]] = {}
+    response_ids: set[str] = set()
+    trace_ids: set[str] = set()
+    invocation_event_ids: set[str] = set()
+    trajectory: list[AgentToolOutcome] = []
+    successful_calls: list[tuple[str, dict]] = []
+
+    for event in events:
+        event_id = str(getattr(event, "id", "") or "").strip()
+        trace_id = str(getattr(event, "invocation_id", "") or "").strip()
+        if trace_id:
+            trace_ids.add(trace_id)
+        if getattr(event, "usage_metadata", None) is not None:
+            if not event_id:
+                raise Conflict(
+                    "agent_invocation_evidence_invalid",
+                    "The live analyst returned usage evidence without an ADK event identifier.",
+                )
+            invocation_event_ids.add(event_id)
+        for call in event.get_function_calls():
+            name = str(call.name or "")
+            if name not in allowed_tools:
+                raise Conflict("agent_tool_scope_violation", "The analyst called a tool outside the bounded set.")
+            call_id = str(call.id or "").strip()
+            if not call_id or call_id in calls_by_id:
+                raise Conflict(
+                    "agent_tool_pairing_invalid",
+                    "The live analyst returned a missing or duplicate ADK function-call identifier.",
+                )
+            call_args = call.args if isinstance(call.args, dict) else {}
+            calls_by_id[call_id] = (name, call_args)
+        for response in event.get_function_responses():
+            response_id = str(response.id or "").strip()
+            observed_call = calls_by_id.get(response_id)
+            name = str(response.name or "")
+            if (
+                not response_id
+                or response_id in response_ids
+                or observed_call is None
+                or name != observed_call[0]
+            ):
+                raise Conflict(
+                    "agent_tool_pairing_invalid",
+                    "The live analyst returned an ADK function response that did not match one observed call.",
+                )
+            if name not in allowed_tools:
+                raise Conflict("agent_tool_scope_violation", "The analyst returned a tool outside the bounded set.")
+            response_ids.add(response_id)
+            outcome = _tool_outcome(response.response, tool_name=name)
+            trajectory.append(AgentToolOutcome(name=name, outcome=outcome))
+            if outcome == "success":
+                successful_calls.append((name, observed_call[1]))
+
+    invocation_count = len(invocation_event_ids)
+    if len(trace_ids) != 1:
+        raise Conflict(
+            "agent_trace_evidence_invalid",
+            "The live analyst did not expose exactly one ADK invocation identifier.",
+        )
+    if invocation_count < 1 or invocation_count > VertexAdkCaseAnalyst.max_llm_calls:
+        raise Conflict(
+            "agent_invocation_evidence_invalid",
+            "The live analyst did not expose a bounded invocation count.",
+        )
+    if not 4 <= len(trajectory) <= 12:
+        raise Conflict(
+            "agent_tool_trajectory_invalid",
+            "The live analyst did not expose a bounded tool trajectory.",
+        )
+    if response_ids != set(calls_by_id):
+        raise Conflict(
+            "agent_tool_pairing_invalid",
+            "The live analyst did not return exactly one ADK response for every observed tool call.",
+        )
+
+    required_tools = {
+        "search_custodian",
+        "load_candidate",
+        "submit_observations",
+        "propose_discriminator",
+    }
+    successful_names = {name for name, _ in successful_calls}
+    if not required_tools.issubset(successful_names):
+        raise Conflict(
+            "agent_tool_trajectory_incomplete",
+            "The live analyst skipped or failed a required bounded tool.",
+        )
+
+    selected_id = proposal.selected_candidate_id
+    selected = next((item for item in ranked_candidates if item.id == selected_id), None)
+    searched_tenants = {
+        str(args.get("tenant_id"))
+        for name, args in successful_calls
+        if name == "search_custodian" and args.get("tenant_id")
+    }
+    authorized_tenants = {item.tenant_id for item in ranked_candidates}
+    if searched_tenants != authorized_tenants:
+        raise Conflict(
+            "agent_custodian_search_incomplete",
+            "The live analyst did not search every authorized custodian boundary.",
+        )
+    if selected is None:
+        raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
+    for required_name in ("load_candidate", "submit_observations", "propose_discriminator"):
+        if not any(
+            name == required_name and args.get("candidate_id") == selected.id
+            for name, args in successful_calls
+        ):
+            raise Conflict(
+                "agent_selected_tool_binding_invalid",
+                "The live analyst tool trajectory did not bind to the selected candidate.",
+            )
+    if not any(
+        name == "submit_observations"
+        and args.get("candidate_id") == selected.id
+        and args.get("visible_signals") == proposal.visible_signals
+        and set(proposal.visible_signals).issubset(set(selected.public_signals))
+        for name, args in successful_calls
+    ):
+        raise Conflict(
+            "agent_observation_tool_binding_invalid",
+            "The live analyst observations did not match the selected candidate's visible signals.",
+        )
+    if not any(
+        name == "propose_discriminator"
+        and args.get("attribute_id") == selected.restricted_attribute_id
+        and args.get("question") == proposal.next_question
+        for name, args in successful_calls
+    ):
+        raise Conflict(
+            "agent_discriminator_tool_binding_invalid",
+            "The live analyst tool trajectory did not bind the allowed discriminator.",
+        )
+
+    return AgentExecutionEvidence(
+        trace_id=next(iter(trace_ids)),
+        invocation_count=invocation_count,
+        tool_trajectory=trajectory,
+        typed_output_valid=True,
+    )
 
 
 class VertexAdkCaseAnalyst:
@@ -264,7 +448,7 @@ class VertexAdkCaseAnalyst:
 
     async def _analyze_async(
         self, case: CaseRecord, candidates: list[Candidate]
-    ) -> tuple[str, AnalysisProposal]:
+    ) -> tuple[str, AnalysisProposal, AgentExecutionEvidence]:
         try:
             from google.adk.agents.invocation_context import LlmCallsLimitExceededError
             from google.adk.agents.run_config import RunConfig
@@ -284,6 +468,7 @@ class VertexAdkCaseAnalyst:
         user_id = f"case:{case.id}"
         session_id = run_id
         final_text = ""
+        observed_events: list[object] = []
         try:
             session_service = InMemorySessionService()
             await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
@@ -301,6 +486,7 @@ class VertexAdkCaseAnalyst:
                 ),
                 run_config=RunConfig(max_llm_calls=self.max_llm_calls),
             ):
+                observed_events.append(event)
                 if event.is_final_response() and event.content:
                     final_text = "".join(
                         part.text or "" for part in event.content.parts if getattr(part, "text", None)
@@ -354,7 +540,23 @@ class VertexAdkCaseAnalyst:
                     "agent_discriminator_invalid",
                     "The analyst proposed a discriminator outside the selected candidate's allowed private fact.",
                 )
-        return run_id, proposal
+        execution = _observed_execution_evidence(
+            events=observed_events,
+            ranked_candidates=ranked_candidates,
+            proposal=proposal,
+        )
+        proposal = proposal.model_copy(
+            update={
+                "tool_trajectory": [
+                    f"{entry.name}:{entry.outcome}" for entry in execution.tool_trajectory
+                ]
+            }
+        )
+        return run_id, proposal, execution
 
-    def analyze(self, case: CaseRecord, candidates: list[Candidate]) -> tuple[str, AnalysisProposal]:
+    def analyze(
+        self,
+        case: CaseRecord,
+        candidates: list[Candidate],
+    ) -> tuple[str, AnalysisProposal, AgentExecutionEvidence]:
         return asyncio.run(self._analyze_async(case, candidates))

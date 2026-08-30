@@ -354,7 +354,7 @@ function validRunReceipt({ commit, tree, versions, runId, ordinal, workflowEpoch
       simulator_https_verified: true,
       simulator_api_auth_verified: true,
       callback_signature_verified: true,
-      simulator_etag: `etag-00${ordinal}`,
+      simulator_etag: `W/"sim-reservation-canonical-00${ordinal}-v6"`,
       callback_replay_outcome: "duplicate-noop",
       callback_replay_side_effect_delta: 0,
     },
@@ -973,7 +973,7 @@ async function createFixture(t) {
       privacyDigest: privacyFile.digest,
       frontendDigest,
     });
-    runReceipt.started_at_utc = new Date(preparedMilliseconds + 30_000).toISOString();
+    runReceipt.started_at_utc = new Date(preparedMilliseconds - 30_000).toISOString();
     runReceipt.ended_at_utc = new Date(preparedMilliseconds + 90_000).toISOString();
     runReceipt.app_revision = canonicalAppRevision;
     runReceipt.simulator_revision = simulatorSourceRevision;
@@ -985,7 +985,7 @@ async function createFixture(t) {
       ordinal,
     });
     chainAudit.events.forEach((event, eventIndex) => {
-      event.occurred_at = new Date(preparedMilliseconds + 32_000 + eventIndex * 2_000).toISOString();
+      event.occurred_at = new Date(preparedMilliseconds - 20_000 + eventIndex * 3_000).toISOString();
     });
     refreshChainAuditBindings(chainAudit, runReceipt);
     const runRelative = `artifacts/private/canonical-run-${ordinal}.json`;
@@ -1778,6 +1778,17 @@ test("clean-browser verification must follow all runs and remain fresh", async (
   ).digest;
   const staleResult = await verifySubmissionReadiness(staleFixture.record, staleFixture);
   assert.equal(failureCodes(staleResult).has("CLEAN_BROWSER_FRESHNESS"), true);
+});
+
+test("canonical run timing includes preparation and rejects the old impossible ordering", async (t) => {
+  const fixture = await createFixture(t);
+  const preparedAt = Date.parse(fixture.preparationReceipts[0].prepared_at);
+  fixture.runReceipts[0].started_at_utc = new Date(preparedAt + 1_000).toISOString();
+  fixture.record.receipts.canonical_runs[0].run_sha256 = (
+    await writeJson(fixture.runPaths[0], fixture.runReceipts[0])
+  ).digest;
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("CANONICAL_RUN_TIME"), true);
 });
 
 test("teardown identity ignores stale billing evidence but requires the frozen release identity", async (t) => {
