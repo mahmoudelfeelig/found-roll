@@ -435,7 +435,7 @@ def scenario_full_happy_path(context: RunContext) -> dict[str, Any]:
             "fr-001-closed-manifest.json",
             {
                 "manifest": manifest,
-                "health": client.get("/healthz").json(),
+                "health": client.get("/api/v1/healthz").json(),
                 "execution_disclosure": "Local fixture analyst, in-memory repository, inline task, fixture relay; no Gemini or Google Cloud calls.",
             },
         )

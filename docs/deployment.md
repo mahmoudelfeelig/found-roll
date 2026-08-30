@@ -323,9 +323,12 @@ function Resolve-ExactArtifactImageResource {
         [Parameter(Mandatory = $true)][string]$ResolvedDigest,
         [Parameter(Mandatory = $true)][string]$ExpectedRepositoryPrefix
     )
-    if ($ResolvedDigest -notmatch '^sha256:[a-f0-9]{64}$') { throw 'An image has no exact resolved SHA-256 digest.' }
+    $ResolvedImageMatch = [regex]::Match($ResolvedDigest, '^(?:(.+)@)?(sha256:[a-f0-9]{64})$')
+    if (-not $ResolvedImageMatch.Success) { throw 'An image has no exact resolved SHA-256 digest.' }
+    $ResolvedImagePackage = $ResolvedImageMatch.Groups[1].Value
+    $CanonicalResolvedDigest = $ResolvedImageMatch.Groups[2].Value
     $EmbeddedDigestMatch = [regex]::Match($InputImage, '@(sha256:[a-f0-9]{64})$')
-    if ($EmbeddedDigestMatch.Success -and $EmbeddedDigestMatch.Groups[1].Value -ne $ResolvedDigest) {
+    if ($EmbeddedDigestMatch.Success -and $EmbeddedDigestMatch.Groups[1].Value -ne $CanonicalResolvedDigest) {
         throw 'A digest-qualified input image disagrees with its authoritative resolved digest.'
     }
     $ImageWithoutDigest = [regex]::Replace($InputImage, '@sha256:[a-f0-9]{64}$', '')
@@ -333,10 +336,13 @@ function Resolve-ExactArtifactImageResource {
     if ($ImagePackage -notmatch "^$([regex]::Escape($ExpectedRepositoryPrefix))[^:/@\s]+$") {
         throw 'An image package is outside the exact dedicated source-deploy repository.'
     }
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedImagePackage) -and $ResolvedImagePackage -ne $ImagePackage) {
+        throw 'A package-qualified resolved image disagrees with the revision container package.'
+    }
     return [pscustomobject]@{
         package = $ImagePackage
-        digest = $ResolvedDigest
-        resource = "$ImagePackage@$ResolvedDigest"
+        digest = $CanonicalResolvedDigest
+        resource = "$ImagePackage@$CanonicalResolvedDigest"
     }
 }
 
@@ -376,6 +382,37 @@ function ConvertTo-SanitizedObjectInventory {
     return @($SanitizedObjects | Sort-Object object_id_sha256)
 }
 
+function Resolve-VerifiedCloudRunOrigin {
+    param(
+        [Parameter(Mandatory = $true)]$ServiceState,
+        [Parameter(Mandatory = $true)][string]$Service,
+        [Parameter(Mandatory = $true)][string]$ExpectedOrigin
+    )
+    $CanonicalExpectedOrigin = $ExpectedOrigin.TrimEnd('/')
+    $StatusUrlProperty = $ServiceState.status.PSObject.Properties['url']
+    $AnnotationsProperty = $ServiceState.metadata.PSObject.Properties['annotations']
+    if (
+        $null -eq $StatusUrlProperty -or [string]::IsNullOrWhiteSpace([string]$StatusUrlProperty.Value) -or
+        $null -eq $AnnotationsProperty -or $null -eq $AnnotationsProperty.Value
+    ) { throw "Cloud Run did not expose URL metadata for $Service." }
+    $UrlsProperty = $AnnotationsProperty.Value.PSObject.Properties['run.googleapis.com/urls']
+    if ($null -eq $UrlsProperty -or [string]::IsNullOrWhiteSpace([string]$UrlsProperty.Value)) {
+        throw "Cloud Run did not expose its authoritative URL set for $Service."
+    }
+    try { $ObservedOrigins = @(([string]$UrlsProperty.Value | ConvertFrom-JsonPreservingStrings) | ForEach-Object { ([string]$_).TrimEnd('/') } | Sort-Object -Unique) }
+    catch { throw "Cloud Run returned an invalid authoritative URL set for $Service." }
+    $StatusOrigin = ([string]$StatusUrlProperty.Value).TrimEnd('/')
+    if (
+        $CanonicalExpectedOrigin -notmatch "^https://$([regex]::Escape($Service))-$([regex]::Escape($ProjectNumber))\.$([regex]::Escape($Region))\.run\.app$" -or
+        $StatusOrigin -notmatch '^https://[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:run\.app|a\.run\.app)$' -or
+        $ObservedOrigins.Count -eq 0 -or
+        @($ObservedOrigins | Where-Object { $_ -notmatch '^https://[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:run\.app|a\.run\.app)$' }).Count -gt 0 -or
+        $ObservedOrigins -notcontains $CanonicalExpectedOrigin -or
+        $ObservedOrigins -notcontains $StatusOrigin
+    ) { throw "Cloud Run's authoritative URL set does not contain both the configured deterministic origin and status URL for $Service." }
+    return $CanonicalExpectedOrigin
+}
+
 function Resolve-RetainedRollbackRevisions {
     if (
         $RetainedRollbackRevisionDeclaration.Count -eq 0 -or
@@ -396,7 +433,7 @@ function Resolve-RetainedRollbackRevisions {
 }
 ```
 
-Both service origins must be fixed before the first production revision starts. Cloud Run's [documented deterministic service URL](https://cloud.google.com/run/docs/triggering/https-request#deterministic_url) is `https://SERVICE_NAME-PROJECT_NUMBER.REGION.run.app`; both Found Roll DNS segments are below the 63-character limit, so the variables above derive their exact first-deploy origins from the tracked service names, project number, and region. Do not create a bootstrap revision merely to discover a URL, and do not deploy with the localhost default and plan to patch `FOUND_ROLL_PUBLIC_BASE_URL` afterward: production validation rejects that revision before it can become ready, and the Cloud Tasks audience would be wrong. After each source deployment, require the authoritative Cloud Run `status.url` to equal the corresponding derived origin before continuing.
+Both service origins must be fixed before the first production revision starts. Cloud Run's [documented deterministic service URL](https://cloud.google.com/run/docs/triggering/https-request#deterministic_url) is `https://SERVICE_NAME-PROJECT_NUMBER.REGION.run.app`; both Found Roll DNS segments are below the 63-character limit, so the variables above derive their exact first-deploy origins from the tracked service names, project number, and region. Do not create a bootstrap revision merely to discover a URL, and do not deploy with the localhost default and plan to patch `FOUND_ROLL_PUBLIC_BASE_URL` afterward: production validation rejects that revision before it can become ready, and the Cloud Tasks audience would be wrong. Cloud Run may retain a hash-based `status.url`; after each deployment, require `run.googleapis.com/urls` to contain both that status URL and the already configured deterministic origin, then probe the deterministic origin directly.
 
 Authenticate an operator account with permission to create the resources below and set the project:
 
@@ -1038,7 +1075,7 @@ try { & .\.venv\Scripts\python.exe -m pytest tests -q } finally { Pop-Location }
 
 The stable simulator contract is:
 
-- health and reads: `GET /healthz`, `/v1/custodians`, `/v1/custodians/{custodian}/inventory`, `/v1/custodians/{custodian}/inventory/{item}`, `/v1/relay/reservations/{id}`;
+- health and reads: `GET /api/v1/healthz`, `/v1/custodians`, `/v1/custodians/{custodian}/inventory`, `/v1/custodians/{custodian}/inventory/{item}`, `/v1/relay/reservations/{id}`;
 - authenticated mutations: `POST /v1/admin/reset`, `/v1/relay/reservations`, `/v1/relay/reservations/{id}/credentials`, `/v1/relay/reservations/{id}/attestations`, `/v1/relay/reservations/{id}/handoff-attestation`;
 - callback artifact headers: `X-Found-Roll-Simulator-Timestamp` and `X-Found-Roll-Simulator-Signature: v1=<hex>`.
 
@@ -1212,30 +1249,56 @@ function Write-ProjectStorageAuditReceipt {
     $RevisionImageDigest = [string]$RevisionState.status.imageDigest
     $ExpectedRevisionImagePrefix = "$Region-docker.pkg.dev/$ProjectId/cloud-run-source-deploy/"
     $RevisionImageBinding = Resolve-ExactArtifactImageResource -InputImage ([string]$RevisionContainers[0].image) -ResolvedDigest $RevisionImageDigest -ExpectedRepositoryPrefix $ExpectedRevisionImagePrefix
+    $RevisionImageDigest = [string]$RevisionImageBinding.digest
     $RevisionImagePackage = [string]$RevisionImageBinding.package
     $RevisionImageResource = [string]$RevisionImageBinding.resource
 
-    $ServiceAnnotations = $ServiceState.metadata.PSObject.Properties['annotations'].Value
-    $RevisionAnnotations = $RevisionState.metadata.PSObject.Properties['annotations'].Value
-    if ($null -eq $ServiceAnnotations -or $null -eq $RevisionAnnotations) { throw "Cloud Run build annotations are missing for revision $Revision." }
-    $ServiceBuildId = [string]$ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-id'].Value
-    $RevisionBuildId = [string]$RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-id'].Value
-    $ServiceBuildName = [string]$ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-name'].Value
-    $ServiceBuildSourceLocation = [string]$ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-source-location'].Value
-    $RevisionBuildSourceLocation = [string]$RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-source-location'].Value
+    $ServiceAnnotationsProperty = $ServiceState.metadata.PSObject.Properties['annotations']
+    $RevisionAnnotationsProperty = $RevisionState.metadata.PSObject.Properties['annotations']
+    if (
+        $null -eq $ServiceAnnotationsProperty -or $null -eq $ServiceAnnotationsProperty.Value -or
+        $null -eq $RevisionAnnotationsProperty -or $null -eq $RevisionAnnotationsProperty.Value
+    ) { throw "Cloud Run build annotations are missing for revision $Revision." }
+    $ServiceAnnotations = $ServiceAnnotationsProperty.Value
+    $RevisionAnnotations = $RevisionAnnotationsProperty.Value
+    $ServiceBuildIdProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-id']
+    $ServiceBuildNameProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-name']
+    $ServiceBuildSourceLocationProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-source-location']
+    $RevisionBuildSourceLocationProperty = $RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-source-location']
+    if (
+        $null -eq $ServiceBuildIdProperty -or
+        $null -eq $ServiceBuildNameProperty -or
+        $null -eq $ServiceBuildSourceLocationProperty -or
+        $null -eq $RevisionBuildSourceLocationProperty
+    ) { throw "Cloud Run source-build annotations are incomplete for revision $Revision." }
+    $ServiceBuildId = [string]$ServiceBuildIdProperty.Value
+    $ServiceBuildName = [string]$ServiceBuildNameProperty.Value
+    $ServiceBuildSourceLocation = [string]$ServiceBuildSourceLocationProperty.Value
+    $RevisionBuildSourceLocation = [string]$RevisionBuildSourceLocationProperty.Value
+    if ($RevisionBuildSourceLocation.TrimStart().StartsWith('{')) {
+        try { $RevisionBuildSourceMap = $RevisionBuildSourceLocation | ConvertFrom-JsonPreservingStrings }
+        catch { throw "Cloud Run returned an invalid revision source-location annotation for $Revision." }
+        $RevisionSourceProperties = @($RevisionBuildSourceMap.PSObject.Properties)
+        $RevisionContainerName = [string]$RevisionContainers[0].name
+        if (
+            $RevisionSourceProperties.Count -ne 1 -or
+            [string]::IsNullOrWhiteSpace($RevisionContainerName) -or
+            [string]$RevisionSourceProperties[0].Name -ne $RevisionContainerName -or
+            [string]::IsNullOrWhiteSpace([string]$RevisionSourceProperties[0].Value)
+        ) { throw "Cloud Run did not bind exactly one source location to the revision container for $Revision." }
+        $RevisionBuildSourceLocation = [string]$RevisionSourceProperties[0].Value
+    }
     $BuildNameMatch = [regex]::Match(
         $ServiceBuildName,
         "^(?://cloudbuild\.googleapis\.com/)?projects/(?:$([regex]::Escape($ProjectId))|$([regex]::Escape($ProjectNumber)))/locations/([^/]+)/builds/([^/]+)$"
     )
     if (
         [string]::IsNullOrWhiteSpace($ServiceBuildId) -or
-        $ServiceBuildId -ne $RevisionBuildId -or
         -not $BuildNameMatch.Success -or
         $BuildNameMatch.Groups[2].Value -ne $ServiceBuildId -or
         [string]::IsNullOrWhiteSpace($ServiceBuildSourceLocation) -or
-        $ServiceBuildSourceLocation -ne $RevisionBuildSourceLocation -or
-        $ServiceBuildSourceLocation -match '[<>]'
-    ) { throw "Cloud Run does not expose one authoritative source-build annotation binding for revision $Revision." }
+        [string]::IsNullOrWhiteSpace($RevisionBuildSourceLocation)
+    ) { throw "Cloud Run does not expose one authoritative service-level source-build binding for revision $Revision." }
     $SourceDeployBuildId = $ServiceBuildId
     $SourceDeployBuildLocation = $BuildNameMatch.Groups[1].Value
     if ($CloudBuildLocations -notcontains $SourceDeployBuildLocation) {
@@ -1243,6 +1306,10 @@ function Write-ProjectStorageAuditReceipt {
     }
     $SourceDeployBuildResource = "projects/$ProjectNumber/locations/$SourceDeployBuildLocation/builds/$SourceDeployBuildId"
     $CanonicalServiceBuildSourceLocation = ConvertTo-CanonicalStorageSourceLocation -SourceLocation $ServiceBuildSourceLocation
+    $CanonicalRevisionBuildSourceLocation = ConvertTo-CanonicalStorageSourceLocation -SourceLocation $RevisionBuildSourceLocation
+    if ($CanonicalServiceBuildSourceLocation -ne $CanonicalRevisionBuildSourceLocation) {
+        throw "The revision source location does not match its authoritative service-level source build for $Revision."
+    }
     $SourceDeployBuildSourceLocationSha256 = Get-Sha256Hex -Value $CanonicalServiceBuildSourceLocation
 
     function Get-ProjectWideCloudBuildAssetInventory {
@@ -1393,7 +1460,7 @@ function Write-ProjectStorageAuditReceipt {
         ) { throw 'The simulator-phase inventory does not carry forward the exact app source-build record.' }
     }
 
-    $RepositoryInventoryJson = @(& gcloud artifacts repositories list --project=$ProjectId --location=all --format=json 2>&1)
+    $RepositoryInventoryJson = @(& gcloud artifacts repositories list --project=$ProjectId --location=all --format=json)
     if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate every Artifact Registry repository.' }
     try { $RepositoryInventory = @(($RepositoryInventoryJson -join "`n") | ConvertFrom-JsonPreservingStrings) }
     catch { throw 'Could not parse the Artifact Registry repository inventory.' }
@@ -1411,7 +1478,7 @@ function Write-ProjectStorageAuditReceipt {
         $RepositoryLocation = $RepositoryResourceMatch.Groups[1].Value
         $RepositoryId = $RepositoryResourceMatch.Groups[2].Value
         $RepositoryUri = "$RepositoryLocation-docker.pkg.dev/$ProjectId/$RepositoryId"
-        $RepositoryImagesJson = @(& gcloud artifacts docker images list $RepositoryUri --include-tags --format="json(package,version,metadata.imageSizeBytes,updateTime,tags)" 2>&1)
+        $RepositoryImagesJson = @(& gcloud artifacts docker images list $RepositoryUri --include-tags --format="json(package,version,metadata.imageSizeBytes,updateTime,tags)")
         if ($LASTEXITCODE -ne 0) { throw "Could not enumerate every image in $RepositoryUri." }
         try { $RepositoryImages = @(($RepositoryImagesJson -join "`n") | ConvertFrom-JsonPreservingStrings) }
         catch { throw "Could not parse the image inventory for $RepositoryUri." }
@@ -1463,10 +1530,9 @@ function Write-ProjectStorageAuditReceipt {
         if ($LASTEXITCODE -ne 0) { throw "Could not bind image digest for $BoundRevision." }
         $BoundContainers = @($BoundRevisionState.spec.containers)
         $BoundImageDigest = [string]$BoundRevisionState.status.imageDigest
-        if ($BoundContainers.Count -ne 1 -or $BoundImageDigest -notmatch '^sha256:[a-f0-9]{64}$') {
-            throw "Protected revision $BoundRevision has no unique container and exact image digest."
-        }
+        if ($BoundContainers.Count -ne 1) { throw "Protected revision $BoundRevision has no unique container." }
         $BoundImageBinding = Resolve-ExactArtifactImageResource -InputImage ([string]$BoundContainers[0].image) -ResolvedDigest $BoundImageDigest -ExpectedRepositoryPrefix "$Region-docker.pkg.dev/$ProjectId/cloud-run-source-deploy/"
+        $BoundImageDigest = [string]$BoundImageBinding.digest
         $RevisionImages += [ordered]@{
             service = $BoundService
             revision = $BoundRevision
@@ -1694,13 +1760,13 @@ Assert-LastGcloudSuccess -Operation 'simulator source deployment'
 $SimulatorStorageBinding = Write-ProjectStorageAuditReceipt -Phase after_simulator_source_deploy -Service $SimulatorService -ReceiptPath $SimulatorStorageReceiptPath
 $SimulatorStorageBinding | ConvertTo-Json -Compress
 gcloud run services describe $SimulatorService --project=$ProjectId --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.containers[0].env)"
-Invoke-RestMethod "$SimulatorUrl/healthz"
-Invoke-RestMethod "$AppUrl/healthz"
+Invoke-RestMethod "$SimulatorUrl/api/v1/healthz"
+Invoke-RestMethod "$AppUrl/api/v1/healthz"
 Assert-GoogleCloudPreflight -PhaseName "final-app-service-update"
-gcloud run services update $AppService --project=$ProjectId --region=$Region --scaling=auto --min=0 --max=1 --min-instances=0 --max-instances=1 --timeout=120s --update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"
+gcloud run services update $AppService --project=$ProjectId --region=$Region --scaling=auto --min=0 --max=1 --min-instances=0 --max-instances=1 --timeout=120s --remove-env-vars=FOUND_ROLL_DEPLOYMENT_RECOVERY --update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"
 Assert-LastGcloudSuccess -Operation 'final app service update'
 gcloud run services describe $AppService --project=$ProjectId --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.containers[0].env)"
-Invoke-RestMethod "$AppUrl/healthz"
+Invoke-RestMethod "$AppUrl/api/v1/healthz"
 function Get-CanonicalRevisionImageBinding {
     param(
         [Parameter(Mandatory = $true)][string]$Service,
@@ -1708,18 +1774,16 @@ function Get-CanonicalRevisionImageBinding {
     )
     $CanonicalServiceState = gcloud run services describe $Service --project=$ProjectId --region=$Region --format=json | ConvertFrom-JsonPreservingStrings
     if ($LASTEXITCODE -ne 0) { throw "Could not describe canonical service $Service." }
-    $CanonicalOrigin = ([string]$CanonicalServiceState.status.url).TrimEnd('/')
-    if ($CanonicalOrigin -ne $ExpectedOrigin.TrimEnd('/')) { throw "Canonical origin for $Service does not equal the configured exact origin." }
+    $CanonicalOrigin = Resolve-VerifiedCloudRunOrigin -ServiceState $CanonicalServiceState -Service $Service -ExpectedOrigin $ExpectedOrigin
     $CanonicalRevision = [string]$CanonicalServiceState.status.latestReadyRevisionName
     if ($CanonicalRevision -notmatch "^$([regex]::Escape($Service))-\d{5}-[a-z0-9]{3}$") { throw "Canonical revision for $Service is invalid." }
     $CanonicalRevisionState = gcloud run revisions describe $CanonicalRevision --project=$ProjectId --region=$Region --format=json | ConvertFrom-JsonPreservingStrings
     if ($LASTEXITCODE -ne 0) { throw "Could not describe canonical revision $CanonicalRevision." }
     $CanonicalContainers = @($CanonicalRevisionState.spec.containers)
     $CanonicalImageDigest = [string]$CanonicalRevisionState.status.imageDigest
-    if ($CanonicalContainers.Count -ne 1 -or $CanonicalImageDigest -notmatch '^sha256:[a-f0-9]{64}$') {
-        throw "Canonical revision $CanonicalRevision has no unique container and exact image digest."
-    }
+    if ($CanonicalContainers.Count -ne 1) { throw "Canonical revision $CanonicalRevision has no unique container." }
     $CanonicalImageBinding = Resolve-ExactArtifactImageResource -InputImage ([string]$CanonicalContainers[0].image) -ResolvedDigest $CanonicalImageDigest -ExpectedRepositoryPrefix "$Region-docker.pkg.dev/$ProjectId/cloud-run-source-deploy/"
+    $CanonicalImageDigest = [string]$CanonicalImageBinding.digest
     $ServiceResource = "projects/$ProjectNumber/locations/$Region/services/$Service"
     return [ordered]@{
         project_id = $ProjectId
@@ -1746,7 +1810,7 @@ $UpdatedReleaseJson = $ReleaseRecord | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText($ReleaseRecordPath, $UpdatedReleaseJson, [System.Text.UTF8Encoding]::new($false))
 ```
 
-The observed simulator Cloud Run `status.url` must equal the already configured `$SimulatorUrl`. Its health payload must report `data.environment=production`; the app health probe must accept that exact envelope and return ready both before and after the compatibility flag is removed. The frozen release receipt must show the flag as `false`. `--allow-unauthenticated` makes the fictional simulator read API and health route reachable for the demo; every mutation still fails closed on its bearer API key. `SIMULATOR_ENV=production` also makes startup fail if the API, token, or callback secret is missing, shorter than 24 characters, a placeholder, or reused across purposes. `--scaling=auto` prevents inherited manual scaling. Both service-level `--max=1` and revision-level `--max-instances=1` are mandatory because this resettable simulator keeps process-local fixture state; `--min=0` and `--min-instances=0` prevent idle instances, and `--timeout=20s` bounds each simulator request. Concurrency eight limits simultaneous requests within the one allowed instance; it is not an instance cap. This is acceptable only for one synthetic demonstration and is not a persistence or scalability design. A real custodian integration must be private, durable, and use workload identity/OIDC rather than a long-lived bearer key.
+The simulator's authoritative `run.googleapis.com/urls` set must contain the already configured deterministic `$SimulatorUrl` and its observed Cloud Run `status.url`. Its health payload must report `data.environment=production`; the app health probe must accept that exact envelope and return ready both before and after the compatibility flag is removed. The frozen release receipt must show the flag as `false`. `--allow-unauthenticated` makes the fictional simulator read API and health route reachable for the demo; every mutation still fails closed on its bearer API key. `SIMULATOR_ENV=production` also makes startup fail if the API, token, or callback secret is missing, shorter than 24 characters, a placeholder, or reused across purposes. `--scaling=auto` prevents inherited manual scaling. Both service-level `--max=1` and revision-level `--max-instances=1` are mandatory because this resettable simulator keeps process-local fixture state; `--min=0` and `--min-instances=0` prevent idle instances, and `--timeout=20s` bounds each simulator request. Concurrency eight limits simultaneous requests within the one allowed instance; it is not an instance cap. This is acceptable only for one synthetic demonstration and is not a persistence or scalability design. A real custodian integration must be private, durable, and use workload identity/OIDC rather than a long-lived bearer key.
 
 The public origin does not make rich custody data public. In production, passport snapshots, events, candidates, manifests, and the demo snapshot require `X-Found-Roll-Staff-Token`. General demo mutations use `X-Found-Roll-Demo-Token`; staff evidence, identity attestation, and release also use the staff credential; intake, claimant-link issuance, and duplicate release-task delivery require both; approval uses `X-Found-Roll-Supervisor-Token`; and claimant evidence uses the one-time `X-Found-Roll-Claim-Link` against a purpose-built coarse projection. Before loading any rich projection, the browser calls `GET /api/v1/auth/runtime-roles` with all three reusable headers; the endpoint validates them strictly even in development, mutates nothing, and returns the configured actor IDs with no-store headers. The server records those exact actors and rejects a conflicting optional legacy actor field. Empty, partial, or rejected browser configuration clears the whole in-memory private session. Reset and outbox reconciliation use `X-Found-Roll-Admin-Token` from authenticated terminal/Cloud Shell tooling only. Keep the deployment in the dedicated `_synthetic_demo` namespace, use narrow CORS, cap instances, and disclose that these demo credentials are not production identity.
 
@@ -1788,8 +1852,8 @@ Capture command output to a redacted release receipt. A canonical deployment is 
 Health and revision identity:
 
 ```powershell
-Invoke-RestMethod "$AppUrl/healthz"
-Invoke-RestMethod "$SimulatorUrl/healthz"
+Invoke-RestMethod "$AppUrl/api/v1/healthz"
+Invoke-RestMethod "$SimulatorUrl/api/v1/healthz"
 gcloud run services describe $AppService --project=$ProjectId --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.serviceAccountName,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)"
 gcloud run services describe $SimulatorService --project=$ProjectId --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.serviceAccountName,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)"
 ```

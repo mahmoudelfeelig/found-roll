@@ -194,7 +194,7 @@ def ready_reservation(
 def test_success_errors_and_validation_always_disclose_simulation(harness: tuple[TestClient, FixtureStore]) -> None:
     client, _ = harness
 
-    health = assert_simulated(client.get("/healthz"), 200)
+    health = assert_simulated(client.get("/api/v1/healthz"), 200)
     assert health["data"]["status"] == "ok"
 
     missing = assert_simulated(client.get("/not-a-route"), 404)

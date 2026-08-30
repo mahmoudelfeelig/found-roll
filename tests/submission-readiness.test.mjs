@@ -2178,8 +2178,8 @@ test("the deployment runbook derives Cloud Run origins without URL-discovery rev
   assert.equal(/two-stage bootstrap/i.test(deployment), false);
   assert.equal(/Do not create a bootstrap revision merely to discover a URL/i.test(deployment), true);
 
-  const assertDeploymentRejected = async (mutatedDeployment) => {
-    assert.notEqual(mutatedDeployment, deployment);
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard = "deterministic Cloud Run origin safeguard") => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
     await writeFile(deploymentPath, mutatedDeployment, "utf8");
     fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
     const result = await verifySubmissionReadiness(fixture.record, fixture);
@@ -2200,6 +2200,157 @@ test("the deployment runbook derives Cloud Run origins without URL-discovery rev
     "Do not create a bootstrap revision merely to discover a URL",
     "On a new project, use a two-stage bootstrap to create noncanonical revisions solely to discover both URLs",
   ));
+  await assertDeploymentRejected(deployment.replace(
+    "$AnnotationsProperty = $ServiceState.metadata.PSObject.Properties['annotations']",
+    "$AnnotationsProperty = $ServiceState.metadata.annotations",
+  ), "safe service-annotation property access");
+  await assertDeploymentRejected(deployment.replace(
+    "$UrlsProperty = $AnnotationsProperty.Value.PSObject.Properties['run.googleapis.com/urls']",
+    "$UrlsProperty = $AnnotationsProperty.Value.'run.googleapis.com/urls'",
+  ), "safe run.googleapis.com/urls property access");
+  await assertDeploymentRejected(deployment.replace(
+    "$null -eq $AnnotationsProperty",
+    "$false",
+  ), "missing service annotations must fail closed");
+  await assertDeploymentRejected(deployment.replace(
+    "$null -eq $UrlsProperty",
+    "$false",
+  ), "missing Cloud Run URL annotation must fail closed");
+  await assertDeploymentRejected(deployment.replace(
+    "[string]$UrlsProperty.Value | ConvertFrom-JsonPreservingStrings",
+    "[string]$UrlsProperty.Value",
+  ), "Cloud Run URL annotation must use the string-preserving JSON parser");
+  await assertDeploymentRejected(deployment.replace(
+    "$ObservedOrigins -notcontains $CanonicalExpectedOrigin",
+    "$false",
+  ), "the advertised URL set must contain the deterministic expected origin");
+  await assertDeploymentRejected(deployment.replace(
+    "$ObservedOrigins -notcontains $StatusOrigin",
+    "$false",
+  ), "the advertised URL set must contain the live status origin");
+  await assertDeploymentRejected(deployment.replace(
+    "return $CanonicalExpectedOrigin",
+    "return $StatusOrigin",
+  ), "the verified origin helper must return the deterministic expected origin");
+  await assertDeploymentRejected(deployment.replace(
+    "origin = $CanonicalOrigin",
+    "origin = ([string]$CanonicalServiceState.status.url).TrimEnd('/')",
+  ), "the canonical receipt must store the deterministic expected origin");
+  await assertDeploymentRejected(deployment.replace(
+    '--remove-env-vars=FOUND_ROLL_DEPLOYMENT_RECOVERY --update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"',
+    '--update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"',
+  ), "the final app update must remove deployment recovery while disabling legacy health");
+});
+
+test("canonical Cloud Run origin binding accepts a legacy status URL only when both origins are advertised", async (t) => {
+  const deployment = await readFile(path.join(projectRoot, "docs", "deployment.md"), "utf8");
+  const imageHelperStart = deployment.indexOf("function Resolve-ExactArtifactImageResource {");
+  const imageHelperEnd = deployment.indexOf("\n\nfunction ConvertTo-CanonicalStorageSourceLocation", imageHelperStart);
+  const verifiedOriginHelperStart = deployment.indexOf("function Resolve-VerifiedCloudRunOrigin {");
+  const verifiedOriginHelperEnd = deployment.indexOf("\n\nfunction Resolve-RetainedRollbackRevisions", verifiedOriginHelperStart);
+  const originHelperStart = deployment.indexOf("function Get-CanonicalRevisionImageBinding {");
+  const originHelperEnd = deployment.indexOf("\n$CanonicalAppBinding = Get-CanonicalRevisionImageBinding", originHelperStart);
+  assert.notEqual(imageHelperStart, -1, "missing image-binding helper");
+  assert.notEqual(imageHelperEnd, -1, "missing image-binding helper end marker");
+  assert.notEqual(verifiedOriginHelperStart, -1, "missing verified Cloud Run origin helper");
+  assert.notEqual(verifiedOriginHelperEnd, -1, "missing verified Cloud Run origin helper end marker");
+  assert.notEqual(originHelperStart, -1, "missing canonical origin helper");
+  assert.notEqual(originHelperEnd, -1, "missing canonical origin helper end marker");
+  const imageHelper = deployment.slice(imageHelperStart, imageHelperEnd);
+  const verifiedOriginHelper = deployment.slice(verifiedOriginHelperStart, verifiedOriginHelperEnd);
+  const originHelper = deployment.slice(originHelperStart, originHelperEnd);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-canonical-origin-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const scriptPath = path.join(temporaryRoot, "canonical-origin.ps1");
+  const script = `Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process { Microsoft.PowerShell.Utility\\ConvertFrom-Json -InputObject $Json -DateKind String -ErrorAction Stop }
+}
+${imageHelper}
+${verifiedOriginHelper}
+$ProjectId = 'found-roll-agentic-20260830'
+$ProjectNumber = '1061926987746'
+$Region = 'us-central1'
+$Service = 'found-roll-app'
+$ExpectedOrigin = 'https://found-roll-app-1061926987746.us-central1.run.app'
+$LegacyOrigin = 'https://found-roll-app-yh3pkgsv5a-uc.a.run.app'
+$OtherLegacyOrigin = 'https://found-roll-app-otherhash-uc.a.run.app'
+$Package = 'us-central1-docker.pkg.dev/found-roll-agentic-20260830/cloud-run-source-deploy/found-roll-app'
+$Digest = 'sha256:${"c".repeat(64)}'
+$script:RevisionJson = ([ordered]@{
+    metadata = [ordered]@{ creationTimestamp = '2026-08-30T20:00:00.000Z' }
+    spec = [ordered]@{ containers = @([ordered]@{ image = "\${Package}:latest" }) }
+    status = [ordered]@{ imageDigest = "$Package@$Digest" }
+} | ConvertTo-Json -Compress -Depth 10)
+function Set-ServiceState {
+    param(
+        [Parameter(Mandatory = $true)][string]$StatusOrigin,
+        [AllowNull()][string]$UrlsAnnotation,
+        [bool]$IncludeUrlsAnnotation = $true
+    )
+    $Annotations = [ordered]@{}
+    if ($IncludeUrlsAnnotation) { $Annotations['run.googleapis.com/urls'] = $UrlsAnnotation }
+    $script:ServiceJson = ([ordered]@{
+        metadata = [ordered]@{ annotations = $Annotations }
+        status = [ordered]@{ url = $StatusOrigin; latestReadyRevisionName = 'found-roll-app-00001-abc' }
+    } | ConvertTo-Json -Compress -Depth 10)
+}
+function gcloud {
+    $Invocation = $args -join ' '
+    $global:LASTEXITCODE = 0
+    if ($Invocation -match '^run services describe ') { $script:ServiceJson; return }
+    if ($Invocation -match '^run revisions describe ') { $script:RevisionJson; return }
+    throw "Unexpected gcloud invocation: $Invocation"
+}
+${originHelper}
+function Assert-Rejected {
+    param([Parameter(Mandatory = $true)][scriptblock]$Operation, [Parameter(Mandatory = $true)][string]$Case)
+    $Rejected = $false
+    try { [void](& $Operation) } catch { $Rejected = $true }
+    if (-not $Rejected) { throw "Canonical origin binding accepted $Case." }
+}
+$AdvertisedOrigins = ConvertTo-Json -InputObject @($LegacyOrigin, $ExpectedOrigin) -Compress
+Set-ServiceState -StatusOrigin $LegacyOrigin -UrlsAnnotation $AdvertisedOrigins
+$Binding = Get-CanonicalRevisionImageBinding -Service $Service -ExpectedOrigin $ExpectedOrigin
+if ($Binding.origin -cne $ExpectedOrigin) { throw 'Canonical receipt origin did not remain deterministic.' }
+if ($Binding.image_digest -cne $Digest -or $Binding.image_resource -cne "$Package@$Digest") {
+    throw 'Canonical image binding was not normalized while accepting the advertised legacy status URL.'
+}
+Assert-Rejected -Case 'a missing run.googleapis.com/urls annotation' -Operation {
+    Set-ServiceState -StatusOrigin $LegacyOrigin -UrlsAnnotation $null -IncludeUrlsAnnotation $false
+    Get-CanonicalRevisionImageBinding -Service $Service -ExpectedOrigin $ExpectedOrigin
+}
+Assert-Rejected -Case 'malformed run.googleapis.com/urls JSON' -Operation {
+    Set-ServiceState -StatusOrigin $LegacyOrigin -UrlsAnnotation '{not-json'
+    Get-CanonicalRevisionImageBinding -Service $Service -ExpectedOrigin $ExpectedOrigin
+}
+Assert-Rejected -Case 'an advertised set missing the deterministic origin' -Operation {
+    Set-ServiceState -StatusOrigin $LegacyOrigin -UrlsAnnotation (ConvertTo-Json -InputObject @($LegacyOrigin) -Compress)
+    Get-CanonicalRevisionImageBinding -Service $Service -ExpectedOrigin $ExpectedOrigin
+}
+Assert-Rejected -Case 'a live status URL absent from the advertised set' -Operation {
+    Set-ServiceState -StatusOrigin $OtherLegacyOrigin -UrlsAnnotation $AdvertisedOrigins
+    Get-CanonicalRevisionImageBinding -Service $Service -ExpectedOrigin $ExpectedOrigin
+}
+'CANONICAL_ORIGIN_BINDING_PASS'
+`;
+  await writeFile(scriptPath, script, "utf8");
+  const result = spawnSync("pwsh", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+  ], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /CANONICAL_ORIGIN_BINDING_PASS/);
 });
 
 test("the deployment storage audit uses project-scoped Storage JSON metadata for exact ownership", async (t) => {
@@ -2407,6 +2558,279 @@ test("the deployment storage audit uses paginated Storage JSON object modes arou
   );
 });
 
+test("Artifact Registry JSON inventories keep stderr separate and fail closed", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+  const repositoryCommand = "$RepositoryInventoryJson = @(& gcloud artifacts repositories list --project=$ProjectId --location=all --format=json)";
+  const repositoryExitCheck = "if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate every Artifact Registry repository.' }";
+  const repositoryParse = 'try { $RepositoryInventory = @(($RepositoryInventoryJson -join "`n") | ConvertFrom-JsonPreservingStrings) }';
+  const repositoryParseFailure = "catch { throw 'Could not parse the Artifact Registry repository inventory.' }";
+  const imageCommand = '$RepositoryImagesJson = @(& gcloud artifacts docker images list $RepositoryUri --include-tags --format="json(package,version,metadata.imageSizeBytes,updateTime,tags)")';
+  const imageExitCheck = 'if ($LASTEXITCODE -ne 0) { throw "Could not enumerate every image in $RepositoryUri." }';
+  const imageParse = 'try { $RepositoryImages = @(($RepositoryImagesJson -join "`n") | ConvertFrom-JsonPreservingStrings) }';
+  const imageParseFailure = 'catch { throw "Could not parse the image inventory for $RepositoryUri." }';
+
+  for (const [command, name] of [[repositoryCommand, "repository"], [imageCommand, "image"]]) {
+    assert.equal(deployment.includes(command), true, `missing clean ${name} JSON inventory command`);
+    assert.doesNotMatch(command, /2>&1/);
+  }
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  const mutations = [
+    [repositoryCommand, repositoryCommand.slice(0, -1) + " 2>&1)", "repository JSON stdout must not merge stderr"],
+    [repositoryExitCheck, "# repository inventory exit check removed", "repository inventory must check LASTEXITCODE"],
+    [repositoryParse, repositoryParse.replace("ConvertFrom-JsonPreservingStrings", "Write-Output"), "repository inventory must parse JSON explicitly"],
+    [repositoryParseFailure, "# repository inventory parse failure removed", "repository inventory must reject malformed JSON"],
+    [imageCommand, imageCommand.slice(0, -1) + " 2>&1)", "image JSON stdout must not merge stderr"],
+    [imageExitCheck, "# image inventory exit check removed", "image inventory must check LASTEXITCODE"],
+    [imageParse, imageParse.replace("ConvertFrom-JsonPreservingStrings", "Write-Output"), "image inventory must parse JSON explicitly"],
+    [imageParseFailure, "# image inventory parse failure removed", "image inventory must reject malformed JSON"],
+  ];
+  for (const [expected, replacement, safeguard] of mutations) {
+    await assertDeploymentRejected(deployment.replace(expected, replacement), safeguard);
+  }
+});
+
+test("the storage audit accepts a recovery revision with only its exact source-location annotation", async (t) => {
+  const deployment = await readFile(path.join(projectRoot, "docs", "deployment.md"), "utf8");
+  const bindingStart = deployment.indexOf("    $ServiceAnnotationsProperty = $ServiceState.metadata.PSObject.Properties['annotations']");
+  const bindingEndMarker = "    $SourceDeployBuildSourceLocationSha256 = Get-Sha256Hex -Value $CanonicalServiceBuildSourceLocation";
+  const bindingEndStart = deployment.indexOf(bindingEndMarker, bindingStart);
+  const sourceHelperStart = deployment.indexOf("function ConvertTo-CanonicalStorageSourceLocation {");
+  const sourceHelperEnd = deployment.indexOf("\n\nfunction ConvertTo-SanitizedObjectInventory", sourceHelperStart);
+  assert.notEqual(bindingStart, -1, "missing Cloud Run source-build annotation binding block");
+  assert.notEqual(bindingEndStart, -1, "missing source-build annotation binding end marker");
+  assert.notEqual(sourceHelperStart, -1, "missing source-location canonicalizer");
+  assert.notEqual(sourceHelperEnd, -1, "missing source-location canonicalizer end marker");
+  const bindingEnd = bindingEndStart + bindingEndMarker.length;
+  const bindingBlock = deployment.slice(bindingStart, bindingEnd);
+  const sourceHelper = deployment.slice(sourceHelperStart, sourceHelperEnd);
+  assert.doesNotMatch(bindingBlock, /RevisionAnnotations\.PSObject\.Properties\['run\.googleapis\.com\/build-(?:id|name)'\]/);
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-recovery-binding-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const scriptPath = path.join(temporaryRoot, "recovery-binding.ps1");
+  const script = `Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process { Microsoft.PowerShell.Utility\\ConvertFrom-Json -InputObject $Json -DateKind String -ErrorAction Stop }
+}
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    $Hasher = [System.Security.Cryptography.SHA256]::Create()
+    try { return [Convert]::ToHexString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value))).ToLowerInvariant() }
+    finally { $Hasher.Dispose() }
+}
+${sourceHelper}
+function Resolve-RecoverySourceBinding {
+    param(
+        [Parameter(Mandatory = $true)]$ServiceAnnotations,
+        [Parameter(Mandatory = $true)]$RevisionAnnotations,
+        [Parameter(Mandatory = $true)][string]$ContainerName
+    )
+    $ProjectId = 'found-roll-agentic-20260830'
+    $ProjectNumber = '1061926987746'
+    $CloudBuildLocations = @('global', 'us-central1')
+    $Revision = 'found-roll-app-00002-lrx'
+    $ServiceState = [pscustomobject]@{ metadata = [pscustomobject]@{ annotations = $ServiceAnnotations } }
+    $RevisionState = [pscustomobject]@{ metadata = [pscustomobject]@{ annotations = $RevisionAnnotations } }
+    $RevisionContainers = @([pscustomobject]@{ name = $ContainerName })
+${bindingBlock}
+    return [pscustomobject]@{
+        build_id = $SourceDeployBuildId
+        build_location = $SourceDeployBuildLocation
+        build_resource = $SourceDeployBuildResource
+        source_location_sha256 = $SourceDeployBuildSourceLocationSha256
+    }
+}
+function Assert-Rejected {
+    param([Parameter(Mandatory = $true)][scriptblock]$Operation, [Parameter(Mandatory = $true)][string]$Case)
+    $Rejected = $false
+    try { [void](& $Operation) } catch { $Rejected = $true }
+    if (-not $Rejected) { throw "Recovery binding accepted $Case." }
+}
+$BuildId = 'd01c174d-292a-4522-afb4-651526912a9f'
+$BuildSource = 'gs://run-sources-found-roll-agentic-20260830-us-central1/services/found-roll-app/source.zip#1788122848644581'
+$ServiceAnnotations = [pscustomobject]@{
+    'run.googleapis.com/build-id' = $BuildId
+    'run.googleapis.com/build-name' = "projects/1061926987746/locations/us-central1/builds/$BuildId"
+    'run.googleapis.com/build-source-location' = $BuildSource
+}
+$RevisionSourceJson = [ordered]@{ 'found-roll-app-1' = $BuildSource } | ConvertTo-Json -Compress
+$RevisionAnnotations = [pscustomobject]@{
+    'run.googleapis.com/build-source-location' = $RevisionSourceJson
+}
+if ($null -ne $RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-id']) { throw 'Recovery fixture unexpectedly has a revision build ID.' }
+if ($null -ne $RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-name']) { throw 'Recovery fixture unexpectedly has a revision build name.' }
+$Binding = Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations $RevisionAnnotations -ContainerName 'found-roll-app-1'
+if (
+    $Binding.build_id -cne $BuildId -or
+    $Binding.build_location -cne 'us-central1' -or
+    $Binding.build_resource -cne "projects/1061926987746/locations/us-central1/builds/$BuildId" -or
+    $Binding.source_location_sha256 -notmatch '^[a-f0-9]{64}$'
+) { throw 'Recovery revision did not resolve through the authoritative service build.' }
+Assert-Rejected -Case 'a service without build-id' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-name' = "projects/1061926987746/locations/us-central1/builds/$BuildId"
+        'run.googleapis.com/build-source-location' = $BuildSource
+    }) -RevisionAnnotations $RevisionAnnotations -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'a service without build-name' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-id' = $BuildId
+        'run.googleapis.com/build-source-location' = $BuildSource
+    }) -RevisionAnnotations $RevisionAnnotations -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'a service without build-source-location' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-id' = $BuildId
+        'run.googleapis.com/build-name' = "projects/1061926987746/locations/us-central1/builds/$BuildId"
+    }) -RevisionAnnotations $RevisionAnnotations -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'a revision without build-source-location' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations ([pscustomobject]@{}) -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'an invalid JSON-wrapped revision source' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-source-location' = '{invalid-json'
+    }) -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'more than one revision source mapping' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-source-location' = ([ordered]@{ 'found-roll-app-1' = $BuildSource; sidecar = $BuildSource } | ConvertTo-Json -Compress)
+    }) -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'a source mapping for another container' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-source-location' = ([ordered]@{ 'other-container' = $BuildSource } | ConvertTo-Json -Compress)
+    }) -ContainerName 'found-roll-app-1'
+}
+Assert-Rejected -Case 'a revision source that disagrees with the service source' -Operation {
+    Resolve-RecoverySourceBinding -ServiceAnnotations $ServiceAnnotations -RevisionAnnotations ([pscustomobject]@{
+        'run.googleapis.com/build-source-location' = ([ordered]@{ 'found-roll-app-1' = 'gs://run-sources-found-roll-agentic-20260830-us-central1/services/found-roll-app/other.zip#1788122848644581' } | ConvertTo-Json -Compress)
+    }) -ContainerName 'found-roll-app-1'
+}
+'RECOVERY_SOURCE_BINDING_PASS'
+`;
+  await writeFile(scriptPath, script, "utf8");
+  const result = spawnSync("pwsh", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+  ], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /RECOVERY_SOURCE_BINDING_PASS/);
+});
+
+test("the readiness verifier preserves recovery-safe Cloud Run source-build binding", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  const mutations = [
+    [
+      "$ServiceAnnotationsProperty = $ServiceState.metadata.PSObject.Properties['annotations']",
+      "$ServiceAnnotationsProperty = $ServiceState.metadata.annotations",
+      "service annotations must be read safely under StrictMode",
+    ],
+    [
+      "$RevisionAnnotationsProperty = $RevisionState.metadata.PSObject.Properties['annotations']",
+      "$RevisionAnnotationsProperty = $RevisionState.metadata.annotations",
+      "revision annotations must be read safely under StrictMode",
+    ],
+    [
+      "$ServiceBuildIdProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-id']",
+      "$ServiceBuildIdProperty = $ServiceAnnotations.'run.googleapis.com/build-id'",
+      "service build-id must use safe property access",
+    ],
+    [
+      "$ServiceBuildNameProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-name']",
+      "$ServiceBuildNameProperty = $ServiceAnnotations.'run.googleapis.com/build-name'",
+      "service build-name must use safe property access",
+    ],
+    [
+      "$ServiceBuildSourceLocationProperty = $ServiceAnnotations.PSObject.Properties['run.googleapis.com/build-source-location']",
+      "$ServiceBuildSourceLocationProperty = $ServiceAnnotations.'run.googleapis.com/build-source-location'",
+      "service build-source-location must use safe property access",
+    ],
+    [
+      "$RevisionBuildSourceLocationProperty = $RevisionAnnotations.PSObject.Properties['run.googleapis.com/build-source-location']",
+      "$RevisionBuildSourceLocationProperty = $RevisionAnnotations.'run.googleapis.com/build-source-location'",
+      "revision build-source-location must use safe property access",
+    ],
+    [
+      "$RevisionBuildSourceLocation.TrimStart().StartsWith('{')",
+      "$false",
+      "JSON-wrapped revision source annotations must be recognized",
+    ],
+    [
+      "$RevisionBuildSourceLocation | ConvertFrom-JsonPreservingStrings",
+      "$RevisionBuildSourceLocation | ConvertFrom-Json",
+      "JSON-wrapped revision source annotations must preserve strings",
+    ],
+    [
+      "$RevisionSourceProperties.Count -ne 1",
+      "$RevisionSourceProperties.Count -lt 1",
+      "a revision must bind exactly one source location",
+    ],
+    [
+      "[string]$RevisionSourceProperties[0].Name -ne $RevisionContainerName",
+      "$false",
+      "the revision source must be keyed to the sole container",
+    ],
+    [
+      "[string]::IsNullOrWhiteSpace([string]$RevisionSourceProperties[0].Value)",
+      "$false",
+      "the revision source mapping must contain a source location",
+    ],
+    [
+      "$CanonicalServiceBuildSourceLocation -ne $CanonicalRevisionBuildSourceLocation",
+      "$false",
+      "revision and service source locations must match canonically",
+    ],
+    [
+      "$AuthoritativeSourceBuild[0].image_resources -notcontains $RevisionImageResource",
+      "$false",
+      "the exact Cloud Build output must contain the revision package@digest",
+    ],
+  ];
+  for (const [expected, replacement, safeguard] of mutations) {
+    await assertDeploymentRejected(deployment.replace(expected, replacement), safeguard);
+  }
+
+  assert.doesNotMatch(deployment, /RevisionAnnotations\.PSObject\.Properties\['run\.googleapis\.com\/build-(?:id|name)'\]/);
+  for (const forbiddenRevisionAnnotation of ["build-id", "build-name"]) {
+    await assertDeploymentRejected(
+      `${deployment}\n\n$RevisionBuildProperty = $RevisionAnnotations.PSObject.Properties['run.googleapis.com/${forbiddenRevisionAnnotation}']\n`,
+      `a recovery revision must not be required to expose ${forbiddenRevisionAnnotation}`,
+    );
+  }
+});
+
 test("the evidence bucket grants only the app's narrow object and metadata roles", async (t) => {
   const fixture = await createFixture(t);
   const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
@@ -2533,7 +2957,7 @@ test("the bound deployment runbook must retain the zero-money retry safeguards",
     "gcloud firestore databases create foreign-db --description=--project=$ProjectId\nAssert-LastGcloudSuccess -Operation 'forged embedded project flag'",
   ));
   await assertDeploymentRejected(deployment.replace(
-    "$EmbeddedDigestMatch.Groups[1].Value -ne $ResolvedDigest",
+    "$EmbeddedDigestMatch.Groups[1].Value -ne $CanonicalResolvedDigest",
     "$false",
   ));
   await assertDeploymentRejected(deployment.replace(
@@ -2572,6 +2996,139 @@ test("the bound deployment runbook must retain the zero-money retry safeguards",
     "$ProjectState = gcloud projects describe $ProjectId --format=json | ConvertFrom-JsonPreservingStrings",
     "$ProjectStateJson = gcloud projects describe $ProjectId --format=json\n$ProjectState = convertfrom-json -InputObject $ProjectStateJson",
   ));
+});
+
+test("the artifact image resolver normalizes bare and package-qualified status digests", async (t) => {
+  const deployment = await readFile(path.join(projectRoot, "docs", "deployment.md"), "utf8");
+  const helperStart = deployment.indexOf("function Resolve-ExactArtifactImageResource {");
+  const helperEnd = deployment.indexOf("\n\nfunction ConvertTo-CanonicalStorageSourceLocation", helperStart);
+  assert.notEqual(helperStart, -1, "missing Resolve-ExactArtifactImageResource");
+  assert.notEqual(helperEnd, -1, "missing image-resolver end marker");
+  const helper = deployment.slice(helperStart, helperEnd);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "found-roll-image-binding-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const scriptPath = path.join(temporaryRoot, "image-binding.ps1");
+  const script = `Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+${helper}
+function Assert-Rejected {
+    param([Parameter(Mandatory = $true)][scriptblock]$Operation, [Parameter(Mandatory = $true)][string]$Case)
+    $Rejected = $false
+    try { [void](& $Operation) } catch { $Rejected = $true }
+    if (-not $Rejected) { throw "Image binding accepted $Case." }
+}
+$ExpectedRepositoryPrefix = 'us-central1-docker.pkg.dev/found-roll-agentic-20260830/cloud-run-source-deploy/'
+$Package = "\${ExpectedRepositoryPrefix}found-roll-app"
+$OtherPackage = "\${ExpectedRepositoryPrefix}other-package"
+$OutsidePackage = 'us-central1-docker.pkg.dev/foreign-project/cloud-run-source-deploy/found-roll-app'
+$Digest = 'sha256:${"a".repeat(64)}'
+$OtherDigest = 'sha256:${"b".repeat(64)}'
+$ShortDigest = 'sha256:${"a".repeat(63)}'
+$LongDigest = 'sha256:${"a".repeat(65)}'
+$UppercaseDigest = 'sha256:${"A".repeat(64)}'
+$SuffixedDigest = "$Digest-extra"
+$Bare = Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest $Digest -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+if ($Bare.digest -cne $Digest -or $Bare.package -cne $Package -or $Bare.resource -cne "$Package@$Digest") {
+    throw 'Bare status digest did not produce one canonical image binding.'
+}
+$Qualified = Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest "$Package@$Digest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+if ($Qualified.digest -cne $Digest -or $Qualified.package -cne $Package -or $Qualified.resource -cne "$Package@$Digest") {
+    throw 'Package-qualified status digest was not normalized to the canonical binding.'
+}
+$QualifiedInput = Resolve-ExactArtifactImageResource -InputImage "$Package@$Digest" -ResolvedDigest "$Package@$Digest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+if ($QualifiedInput.digest -cne $Digest -or $QualifiedInput.resource -cne "$Package@$Digest") {
+    throw 'Matching package-qualified input and status digest were rejected.'
+}
+Assert-Rejected -Case 'a status package that disagrees with the input image' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest "$OtherPackage@$Digest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'a status package outside the expected repository' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest "$OutsidePackage@$Digest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'an embedded input digest that disagrees with a bare status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "$Package@$Digest" -ResolvedDigest $OtherDigest -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'an embedded input digest that disagrees with a qualified status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "$Package@$Digest" -ResolvedDigest "$Package@$OtherDigest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'an empty status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest '' -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'a short status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest $ShortDigest -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'a long package-qualified status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest "$Package@$LongDigest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'an uppercase status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest $UppercaseDigest -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+Assert-Rejected -Case 'a suffixed package-qualified status digest' -Operation {
+    Resolve-ExactArtifactImageResource -InputImage "\${Package}:latest" -ResolvedDigest "$Package@$SuffixedDigest" -ExpectedRepositoryPrefix $ExpectedRepositoryPrefix
+}
+'IMAGE_BINDING_NORMALIZATION_PASS'
+`;
+  await writeFile(scriptPath, script, "utf8");
+  const result = spawnSync("pwsh", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+  ], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /IMAGE_BINDING_NORMALIZATION_PASS/);
+});
+
+test("artifact image receipts store normalized digests and exact package resources", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+
+  const assertDeploymentRejected = async (mutatedDeployment, safeguard) => {
+    if (mutatedDeployment === deployment) assert.fail(`missing deployment marker for ${safeguard}`);
+    await writeFile(deploymentPath, mutatedDeployment, "utf8");
+    fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(mutatedDeployment);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true, safeguard);
+  };
+
+  const normalizedBindings = [
+    ["$RevisionImageDigest = [string]$RevisionImageBinding.digest", "# revision status digest was not normalized"],
+    ["$RevisionImageResource = [string]$RevisionImageBinding.resource", '$RevisionImageResource = "$RevisionImagePackage@$([string]$RevisionState.status.imageDigest)"'],
+    ["$BoundImageDigest = [string]$BoundImageBinding.digest", "# protected-revision status digest was not normalized"],
+    ["image_resource = [string]$BoundImageBinding.resource", 'image_resource = "$([string]$BoundImageBinding.package)@$([string]$BoundRevisionState.status.imageDigest)"'],
+    ["$CanonicalImageDigest = [string]$CanonicalImageBinding.digest", "# canonical-revision status digest was not normalized"],
+    ["image_resource = [string]$CanonicalImageBinding.resource", 'image_resource = "$([string]$CanonicalImageBinding.package)@$([string]$CanonicalRevisionState.status.imageDigest)"'],
+  ];
+  for (const [canonicalBinding, rawStatusBinding] of normalizedBindings) {
+    await assertDeploymentRejected(
+      deployment.replace(canonicalBinding, rawStatusBinding),
+      `${canonicalBinding} must remain normalized by Resolve-ExactArtifactImageResource`,
+    );
+  }
+
+  const resolverSafeguards = [
+    [
+      "if (-not $ResolvedImageMatch.Success) { throw 'An image has no exact resolved SHA-256 digest.' }",
+      "# exact resolved-image match guard removed",
+    ],
+    [
+      "'^(?:(.+)@)?(sha256:[a-f0-9]{64})$'",
+      "'^(?:(.+)@)?(sha256:.+)$'",
+    ],
+  ];
+  for (const [exactSafeguard, weakenedSafeguard] of resolverSafeguards) {
+    await assertDeploymentRejected(
+      deployment.replace(exactSafeguard, weakenedSafeguard),
+      `${exactSafeguard} must remain fail-closed`,
+    );
+  }
 });
 
 test("extracted PowerShell guards execute fail-closed under StrictMode", async (t) => {

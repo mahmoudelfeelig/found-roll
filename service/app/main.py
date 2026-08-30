@@ -382,6 +382,7 @@ def create_app(
         )
 
     @application.get("/healthz")
+    @application.get("/api/v1/healthz")
     def healthz(response: Response):
         evidence_ready = store.is_ready()
         inventory_ready = resolved_inventory.is_ready()

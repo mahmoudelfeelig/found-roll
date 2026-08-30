@@ -317,7 +317,7 @@ test("the operator demo credential is opt-in, mutation-only, and held in memory"
   };
   try {
     const client = new ServiceDemoClient("https://custody.example");
-    await client.request("/healthz");
+    await client.request("/api/v1/healthz");
     assert.equal(client.setDemoToken(" runtime-only "), true);
     await client.post("/api/v1/passports/case/reservations", { approved: true });
     assert.equal(requests[0].options.headers["X-Found-Roll-Demo-Token"], undefined);

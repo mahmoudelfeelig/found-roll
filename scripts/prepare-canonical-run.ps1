@@ -112,8 +112,8 @@ $staffToken = Get-RequiredSecret 'FOUND_ROLL_EVIDENCE_STAFF_TOKEN'
 $supervisorToken = Get-RequiredSecret 'FOUND_ROLL_SUPERVISOR_TOKEN'
 $relayApiKey = Get-RequiredSecret 'FOUND_ROLL_RELAY_API_KEY'
 
-$appHealth = Invoke-RestMethod -Method Get -Uri (Join-ServiceUrl $AppUrl '/healthz')
-$simulatorHealth = Invoke-RestMethod -Method Get -Uri (Join-ServiceUrl $SimulatorUrl '/healthz')
+$appHealth = Invoke-RestMethod -Method Get -Uri (Join-ServiceUrl $AppUrl '/api/v1/healthz')
+$simulatorHealth = Invoke-RestMethod -Method Get -Uri (Join-ServiceUrl $SimulatorUrl '/api/v1/healthz')
 
 foreach ($contractField in @('prompt_version', 'output_schema_version', 'policy_version')) {
     $contractProperty = $appHealth.PSObject.Properties[$contractField]

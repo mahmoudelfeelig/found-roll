@@ -251,6 +251,7 @@ def create_app(
         )
 
     @app.get("/healthz")
+    @app.get("/api/v1/healthz")
     def health() -> dict[str, Any]:
         return envelope(
             {

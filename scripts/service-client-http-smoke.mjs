@@ -242,7 +242,7 @@ async function main() {
   });
 
   try {
-    const simulatorHealth = await waitForHealth(simulator, `${simulatorUrl}/healthz`);
+    const simulatorHealth = await waitForHealth(simulator, `${simulatorUrl}/api/v1/healthz`);
     assert.equal(simulatorHealth.data.service, "found-roll-simulator");
 
     const service = startPythonService({
@@ -273,7 +273,7 @@ async function main() {
       },
     });
 
-    const serviceHealth = await waitForHealth(service, `${serviceUrl}/healthz`);
+    const serviceHealth = await waitForHealth(service, `${serviceUrl}/api/v1/healthz`);
     assert.equal(serviceHealth.service, "found-roll-custody");
     assert.equal(serviceHealth.inventory_mode, "http");
     assert.equal(serviceHealth.inventory_base_url_configured, true);

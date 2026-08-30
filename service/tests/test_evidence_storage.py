@@ -526,7 +526,7 @@ def test_gcs_store_and_health_fail_closed_when_storage_is_unavailable(settings):
             return False
 
     with TestClient(create_app(settings=settings, evidence_store=NotReadyMemoryStore())) as client:
-        health = client.get("/healthz")
+        health = client.get("/api/v1/healthz")
     assert health.status_code == 503
     assert health.json()["status"] == "unavailable"
     assert health.json()["evidence_store_ready"] is False

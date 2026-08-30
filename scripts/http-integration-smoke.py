@@ -87,8 +87,8 @@ def run(
     staff_headers = {"X-Found-Roll-Staff-Token": staff_token}
     supervisor_headers = {"X-Found-Roll-Supervisor-Token": supervisor_token}
 
-    service_health = request_json(service_url, "/healthz")
-    simulator_health = request_json(simulator_url, "/healthz")
+    service_health = request_json(service_url, "/api/v1/healthz")
+    simulator_health = request_json(simulator_url, "/api/v1/healthz")
     if service_health.get("service") != "found-roll-custody":
         raise AssertionError("The service health response is not Found Roll custody.")
     if simulator_health.get("data", {}).get("service") != "found-roll-simulator":

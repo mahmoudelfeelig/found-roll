@@ -38,7 +38,7 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${apiBase}/healthz`, { signal: controller.signal, headers: { Accept: "application/json" } })
+    fetch(`${apiBase}/api/v1/healthz`, { signal: controller.signal, headers: { Accept: "application/json" } })
       .then(async (response) => {
         if (!response.ok) throw new Error(`health status ${response.status}`);
         const payload = await response.json();

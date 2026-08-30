@@ -365,7 +365,7 @@ def test_health_identifies_configured_http_inventory_mode():
     settings = _settings()
 
     def healthy_simulator(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/healthz"
+        assert request.url.path == "/api/v1/healthz"
         return httpx.Response(
             200,
             headers={"X-Found-Roll-Mode": "SIMULATED"},
@@ -388,7 +388,7 @@ def test_health_identifies_configured_http_inventory_mode():
         transport=httpx.MockTransport(healthy_simulator),
     )
     with TestClient(create_app(settings=settings, inventory_gateway=gateway)) as client:
-        health = client.get("/healthz")
+        health = client.get("/api/v1/healthz")
 
     assert health.status_code == 200
     assert health.json()["inventory_mode"] == "http"
@@ -404,7 +404,7 @@ def test_health_identifies_configured_http_inventory_mode():
     with TestClient(
         create_app(settings=settings, inventory_gateway=unavailable_gateway)
     ) as client:
-        unavailable = client.get("/healthz")
+        unavailable = client.get("/api/v1/healthz")
     assert unavailable.status_code == 503
     assert unavailable.json()["status"] == "unavailable"
     assert unavailable.json()["inventory_gateway_configured"] is True

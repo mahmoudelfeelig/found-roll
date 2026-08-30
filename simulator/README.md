@@ -8,7 +8,7 @@ The service records fixture state and one-time token presentation only. It does 
 
 Read-only fixture routes:
 
-- `GET /healthz`
+- `GET /api/v1/healthz` for external readiness; `GET /healthz` remains a container-local compatibility alias
 - `GET /v1/custodians`
 - `GET /v1/custodians/{custodian_id}/inventory`
 - `GET /v1/custodians/{custodian_id}/inventory/{item_id}`

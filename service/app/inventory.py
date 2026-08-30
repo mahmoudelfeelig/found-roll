@@ -191,7 +191,7 @@ class HttpInventoryGateway:
 
     def is_ready(self) -> bool:
         try:
-            _response, payload = self._get("/healthz")
+            _response, payload = self._get("/api/v1/healthz")
             health = _InventoryHealthEnvelope.model_validate(payload)
         except (Unavailable, ValidationError):
             return False
