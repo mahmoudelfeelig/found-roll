@@ -487,6 +487,11 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
     require(adk_agent.output_schema is AnalysisProposal, "local_adk_output_schema_changed")
     require(adk_agent.mode == "single_turn", "local_adk_mode_not_bounded")
     require(adk_analyst.max_llm_calls == 8, "local_adk_call_cap_changed")
+    require(
+        adk_agent.generate_content_config is not None
+        and adk_agent.generate_content_config.max_output_tokens == 2048,
+        "local_adk_output_token_cap_changed",
+    )
     require("untrusted evidence" in adk_agent.instruction, "local_adk_injection_instruction_missing")
     require(len(proposal.tool_trajectory) <= 8, "fixture_tool_trajectory_unbounded")
     require(next_evidence_is_useful(proposal), "canonical_next_evidence_not_useful")
@@ -517,6 +522,7 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
             "output_schema_version": ANALYSIS_PROPOSAL_SCHEMA_VERSION,
             "policy_version": POLICY_VERSION,
             "max_llm_calls_cap": adk_analyst.max_llm_calls,
+            "max_output_tokens_cap": adk_agent.generate_content_config.max_output_tokens,
             "live_trajectory_observed": False,
         },
     }
@@ -762,14 +768,24 @@ def scenario_ambiguous_relay_reconciliation(context: RunContext) -> dict[str, An
 
         relay = AmbiguousRelay()
         app.state.custody_service.relay = relay
-        failed = client.post("/tasks/outbox", json=task)
+        task_headers = {
+            "X-CloudTasks-TaskName": "projects/p/locations/l/queues/q/tasks/fr015-release"
+        }
+        failed = client.post("/tasks/outbox", json=task, headers=task_headers)
         require(failed.status_code == 503, "ambiguous_relay_failure_status_wrong")
         snapshot = client.get(f"/api/v1/passports/{DEMO_CASE_ID}").json()
         require(snapshot["case"]["state"] == "RECONCILIATION_REQUIRED", "reconciliation_state_not_reached")
         require(snapshot["outbox"][-1]["status"] == "FAILED", "reconciliation_outbox_not_failed")
         before = len(snapshot["events"])
-        retry = client.post("/tasks/outbox", json=task)
-        require(retry.status_code == 409, "ambiguous_relay_auto_retry_not_blocked")
+        retry = client.post("/tasks/outbox", json=task, headers=task_headers)
+        retry_body = retry.json()
+        require(retry.status_code == 200, "terminal_failure_not_acknowledged")
+        require(retry_body.get("terminal_failure_acknowledged") is True, "terminal_failure_ack_missing")
+        require(retry_body.get("retryable") is False, "terminal_failure_marked_retryable")
+        require(retry_body.get("manual_action_required") is True, "manual_reconciliation_not_preserved")
+        require(retry_body["outbox"]["status"] == "FAILED", "terminal_outbox_status_changed")
+        require(retry_body["outbox"]["failure_stage"] == "EXECUTE", "terminal_failure_stage_changed")
+        require(retry_body["case"]["state"] == "RECONCILIATION_REQUIRED", "terminal_case_state_changed")
         require(relay.calls == 1, "ambiguous_relay_called_twice")
         after = client.get(f"/api/v1/passports/{DEMO_CASE_ID}").json()
         require(len(after["events"]) == before, "ambiguous_retry_appended_event")
@@ -777,7 +793,10 @@ def scenario_ambiguous_relay_reconciliation(context: RunContext) -> dict[str, An
             "final_state": "RECONCILIATION_REQUIRED",
             "outbox_status": "FAILED",
             "relay_calls": 1,
-            "automatic_retry_status": 409,
+            "terminal_ack_status": 200,
+            "terminal_failure_acknowledged": True,
+            "retryable": False,
+            "manual_action_required": True,
             "retry_event_delta": 0,
         }
 

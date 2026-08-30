@@ -235,7 +235,7 @@ def test_signed_simulator_callback_commits_once_and_replay_is_idempotent(client,
     assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == count
 
 
-def test_ambiguous_release_failure_enters_reconciliation_and_cannot_retry_automatically(
+def test_ambiguous_release_failure_acknowledges_terminal_task_without_reexecution(
     client, app, case_id
 ):
     _reserved, tokens = reserve_and_issue_tokens(client, case_id)
@@ -282,7 +282,10 @@ def test_ambiguous_release_failure_enters_reconciliation_and_cannot_retry_automa
 
     relay = AmbiguousRelay()
     app.state.custody_service.relay = relay
-    failed = client.post("/tasks/outbox", json=task)
+    task_headers = {
+        "X-CloudTasks-TaskName": "projects/p/locations/l/queues/q/tasks/release"
+    }
+    failed = client.post("/tasks/outbox", json=task, headers=task_headers)
     assert failed.status_code == 503, failed.text
     snapshot = client.get(f"/api/v1/passports/{case_id}").json()
     assert snapshot["case"]["state"] == "RECONCILIATION_REQUIRED"
@@ -291,8 +294,14 @@ def test_ambiguous_release_failure_enters_reconciliation_and_cannot_retry_automa
     assert snapshot["events"][-1]["type"] == "RELAY_RECONCILIATION_REQUIRED"
     event_count = len(snapshot["events"])
 
-    retried = client.post("/tasks/outbox", json=task)
-    assert retried.status_code == 409
+    retried = client.post("/tasks/outbox", json=task, headers=task_headers)
+    assert retried.status_code == 200
+    assert retried.json()["terminal_failure_acknowledged"] is True
+    assert retried.json()["retryable"] is False
+    assert retried.json()["manual_action_required"] is True
+    assert retried.json()["outbox"]["status"] == "FAILED"
+    assert retried.json()["outbox"]["failure_stage"] == "EXECUTE"
+    assert retried.json()["case"]["state"] == "RECONCILIATION_REQUIRED"
     assert relay.calls == 1
     after_retry = client.get(f"/api/v1/passports/{case_id}").json()
     assert len(after_retry["events"]) == event_count

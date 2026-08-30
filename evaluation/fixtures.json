@@ -73,7 +73,7 @@
       "title": "Deterministic ranking, bounded local ADK contract, and useful abstention",
       "runner": "fixture_analyst_canonical",
       "implemented_surface": ["FixtureCaseAnalyst", "typed AnalysisProposal"],
-      "expected_assertions": ["canonical candidate is in the top three", "claim acceptance remains false", "question is non-leading and locally useful", "restricted values stay excluded", "offline ADK construction exposes only five proposal tools, typed output, single-turn mode, and an eight-call cap"],
+      "expected_assertions": ["canonical candidate is in the top three", "claim acceptance remains false", "question is non-leading and locally useful", "restricted values stay excluded", "offline ADK construction exposes only five proposal tools, typed output, single-turn mode, an eight-call cap, and a 2048-output-token cap"],
       "not_covered": ["Gemini invocation", "live ADK trajectory", "model variance", "real image understanding"]
     },
     {
@@ -126,10 +126,10 @@
     },
     {
       "id": "FR-015",
-      "title": "Ambiguous relay outcome enters reconciliation and will not auto-retry",
+      "title": "Ambiguous relay outcome enters reconciliation and acknowledges terminal redelivery",
       "runner": "ambiguous_relay_reconciliation",
       "implemented_surface": ["release outbox", "failure transition", "reconciliation guard"],
-      "expected_assertions": ["ambiguous response reaches RECONCILIATION_REQUIRED", "outbox is FAILED", "automatic retry is rejected", "relay is called once"],
+      "expected_assertions": ["ambiguous response reaches RECONCILIATION_REQUIRED", "outbox is FAILED/EXECUTE", "terminal task redelivery receives a non-retryable 2xx acknowledgment", "manual reconciliation remains required", "relay is called once and no event is appended"],
       "not_covered": ["real network timeout", "remote reconciliation query", "Cloud Tasks retry scheduler"]
     }
   ],

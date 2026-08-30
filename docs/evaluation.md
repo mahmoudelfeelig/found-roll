@@ -27,14 +27,14 @@ The scenarios are synthetic and implementation-shaped. Passing all 15 means the 
 | FR-005 | Sensitive property returned `DENY` with the specialist-policy reason | PASS |
 | FR-006 | Dangerous pre-intake was not accepted and created no record or model work; case-count delta was zero | PASS |
 | FR-007 | Each wrong answer consumed and rotated the case/version-scoped claimant link; the fourth reached `MANUAL_REVIEW`; serialized staff event output had no restricted answer/digest fields | PASS |
-| FR-008 | Deterministic analyst selected the canonical fixture candidate, abstained from claim acceptance, and emitted a non-leading question | PASS |
+| FR-008 | Deterministic analyst selected the canonical fixture candidate, abstained from claim acceptance, emitted a non-leading question, and preserved the eight-call plus 2,048-output-token ADK caps | PASS |
 | FR-009 | Route-incompatible top candidate was excluded; the eligible runner-up was selected; analyst still abstained | PASS |
 | FR-010 | With no eligible candidate, the analyst returned `no_eligible_candidates` and invented none | PASS |
 | FR-011 | Stale expected version returned HTTP 409 `stale_case_version` with zero event delta | PASS |
 | FR-012 | Duplicate analysis-task delivery reported replay with zero duplicate events | PASS |
 | FR-013 | Prompt-injection text remained inert and could not authorize a claim; opaque task contained only schema, case, and outbox IDs; the captured staff/publication surfaces had zero restricted findings | PASS |
 | FR-014 | An expired claimant link returned `claim_link_expired` with zero event delta; first handoff-credential presentation succeeded and replay returned `token_replayed` with zero event delta | PASS |
-| FR-015 | Ambiguous relay outcome reached `RECONCILIATION_REQUIRED`; outbox was `FAILED`; retry returned 409; relay call count stayed at one | PASS |
+| FR-015 | Ambiguous relay outcome reached `RECONCILIATION_REQUIRED`; outbox was `FAILED/EXECUTE`; terminal redelivery returned a non-retryable 200 acknowledgment without another relay call or event | PASS |
 
 Aggregate: **15 / 15 passed, 0 failed**. The status string is `LOCAL_PASS_CANONICAL_INCOMPLETE` so a local green run cannot be mistaken for completion of the live evaluation.
 

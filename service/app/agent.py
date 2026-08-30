@@ -224,6 +224,7 @@ class VertexAdkCaseAnalyst:
         return LlmAgent(
             name="found_roll_case_analyst",
             model=model,
+            generate_content_config=types.GenerateContentConfig(max_output_tokens=2048),
             mode="single_turn",
             include_contents="none",
             instruction=CASE_ANALYST_INSTRUCTION,

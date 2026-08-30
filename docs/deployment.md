@@ -28,9 +28,20 @@ Use a dedicated hackathon project, not a shared production project.
 
 ### Zero-real-money guardrail
 
-This architecture uses services that can be billable. It is authorized here only inside a Google Cloud billing account whose Billing Overview literally says **Free trial account** and shows remaining trial credit and time. Stop if the account is paid, the trial is expired or absent, or the console offers or requires **Activate** or **Upgrade**. Never enable paid billing, add a payment, make a deposit, or upgrade the account for this project. A budget alert is informational and is not a spending cap.
+This deployment is **not Always Free**. The pinned Gemini model is priced usage, eight active Secret Manager versions exceed the six-version billing-account allowance, public Cloud Run traffic can consume billable resources, and `gcloud run deploy --source` creates Cloud Build, Cloud Storage, and Artifact Registry artifacts. Any nominal product free tier is a possible credit reduction, not the authorization boundary.
 
-Use one dedicated project in `us-central1`. Keep both Cloud Run services request-based with zero minimum instances, one maximum instance, one CPU, 512 MiB memory, CPU throttling, and no startup CPU boost. Do not add a VPC connector, load balancer, custom domain, GPU, Cloud SQL, paid support, Firestore backup/PITR/TTL, Artifact Analysis scanning, or any resource not listed in this runbook. Delete noncanonical container images and the dedicated project after judging unless retention is required. If the active Free Trial status cannot be proved before API enablement, do not deploy.
+The hard zero-real-money boundary is an active, unexpired, **unupgraded Google Cloud Free Trial**. Before enabling deployment APIs, open Billing Overview in Chrome and capture a redacted manual receipt that proves all of the following for the account linked to this dedicated project:
+
+- the account type literally says **Free trial account**;
+- remaining trial credit is greater than zero;
+- remaining trial time is greater than zero; and
+- paid activation or upgrade has not occurred.
+
+Stop if the account is paid, upgraded, expired, absent, or cannot be distinguished from a paid account. Never click **Activate** or **Upgrade**, add a payment, make a deposit, or convert the account for this project. `gcloud billing projects describe` can confirm that billing is linked, but it cannot prove the account is an unupgraded Free Trial; the Billing Overview receipt is mandatory. The private release record must say `billing_account_type: "free_trial"` exactly and confirm remaining credit, remaining time, and absence of paid activation.
+
+Before API enablement, create two separate project-and-service spend caps in the Cloud Billing console's Preview spend-cap flow, each at the lowest practical demo target: one scoped to Cloud Run and one scoped to the Gemini/Agent Platform service used by the Vertex AI call. Capture a redacted receipt for each cap and do not set the corresponding release-record confirmations until both are enabled. These caps are defense in depth only: enforcement is delayed, in-flight work or overage can still be charged, and persistent or storage resources outside the capped service can keep accruing. Ordinary budget alerts remain informational. Spend caps do not make a paid account acceptable and do not replace the unupgraded Free Trial boundary.
+
+Use one dedicated project in `us-central1`. Keep both Cloud Run services request-based with service-level and revision-level zero minimum instances, one maximum instance, one CPU, 512 MiB memory, CPU throttling, and no startup CPU boost. Do not add a VPC connector, load balancer, custom domain, GPU, Cloud SQL, paid support, Firestore backup/PITR/TTL, Artifact Analysis scanning, or any resource not listed in this runbook. Delete noncanonical build artifacts as you go and delete the dedicated project after judging. If the Free Trial receipt or either service spend-cap receipt is missing, do not enable deployment APIs or deploy.
 
 ```powershell
 $ProjectId = "<google-cloud-project-id>"
@@ -124,11 +135,48 @@ gcloud firestore databases list
 gcloud firestore databases create --location=$FirestoreLocation --type=firestore-native
 ```
 
-Create a private evidence bucket with uniform bucket-level access and public-access prevention:
+Create a private evidence bucket with uniform bucket-level access, public-access prevention, and soft delete disabled. Google Cloud Storage otherwise applies a default seven-day soft-delete policy whose retained bytes can continue to consume storage after ordinary deletion.
 
 ```powershell
-gcloud storage buckets create "gs://$Bucket" --location=$Region --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets create "gs://$Bucket" --location=$Region --uniform-bucket-level-access --public-access-prevention --soft-delete-duration=0
+# If the bucket already existed, clear any inherited/default soft-delete policy before uploading evidence:
+gcloud storage buckets update "gs://$Bucket" --clear-soft-delete
 ```
+
+Configure lifecycle deletion for a date safely after the announced judging period. Replace the date with the first UTC date on which retaining demo evidence is no longer required; do not choose a date during judging. This is a forgotten-data backstop, not an immediate spending stop, so explicit teardown remains mandatory.
+
+```powershell
+$EvidenceDeleteBeforeDate = "<YYYY-MM-DD-after-judging>"
+$LifecyclePath = Join-Path ([System.IO.Path]::GetTempPath()) "found-roll-evidence-lifecycle.json"
+$Lifecycle = @{
+    rule = @(
+        @{
+            action = @{ type = "Delete" }
+            condition = @{ createdBefore = $EvidenceDeleteBeforeDate }
+        }
+    )
+} | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText($LifecyclePath, $Lifecycle, [System.Text.UTF8Encoding]::new($false))
+try {
+    gcloud storage buckets update "gs://$Bucket" --lifecycle-file=$LifecyclePath
+} finally {
+    Remove-Item -LiteralPath $LifecyclePath -Force -ErrorAction SilentlyContinue
+}
+gcloud storage buckets describe "gs://$Bucket" --format="yaml(name,location,iamConfiguration,lifecycle,versioning,softDeletePolicy)"
+```
+
+The bucket description must show no enabled `softDeletePolicy` retention duration. Stop if a positive soft-delete duration remains. Do not enable object versioning, retention locks, backups, or another persistence feature for the synthetic evidence bucket. Before each canonical preparation and again after it, measure all stored versions and fail closed at 5 GiB. This byte check does not discover soft-deleted objects, which is why the policy check is separate and mandatory:
+
+```powershell
+$EvidenceUsage = gcloud storage du --summarize --all-versions "gs://$Bucket"
+$EvidenceMatch = [regex]::Match(($EvidenceUsage -join "`n"), '^\s*(\d+)')
+if (-not $EvidenceMatch.Success) { throw 'Could not verify evidence-bucket byte usage.' }
+$EvidenceBytes = [int64]$EvidenceMatch.Groups[1].Value
+if ($EvidenceBytes -ge 5GB) { throw "Evidence bucket is not under 5 GiB: $EvidenceBytes bytes." }
+$EvidenceBytes
+```
+
+The 5 GiB ceiling is a conservative resource bound, not an assertion that this deployment is Always Free.
 
 Only after the bucket exists, grant the app service account object access on that bucket rather than project-wide storage administration:
 
@@ -136,12 +184,16 @@ Only after the bucket exists, grant the app service account object access on tha
 gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --member="serviceAccount:$AppServiceAccount" --role="roles/storage.objectUser"
 ```
 
-Create the queue in the same region as the app. Use conservative concurrency for the demo and retain default retry behavior unless the tested deployment specifies explicit values:
+Create the queue in the same region as the app with a fully bounded demo retry policy. If it already exists, run the update command instead so an old default—up to 100 attempts—cannot survive:
 
 ```powershell
-gcloud tasks queues create $Queue --location=$Region --max-concurrent-dispatches=5 --max-dispatches-per-second=5
-gcloud tasks queues describe $Queue --location=$Region
+gcloud tasks queues create $Queue --location=$Region --max-concurrent-dispatches=1 --max-dispatches-per-second=1 --max-attempts=3 --max-retry-duration=1s --min-backoff=10s --max-backoff=60s --max-doublings=2
+# Use this instead when the queue already exists:
+gcloud tasks queues update $Queue --location=$Region --max-concurrent-dispatches=1 --max-dispatches-per-second=1 --max-attempts=3 --max-retry-duration=1s --min-backoff=10s --max-backoff=60s --max-doublings=2
+gcloud tasks queues describe $Queue --location=$Region --format="yaml(state,rateLimits,retryConfig)"
 ```
+
+Cloud Tasks stops only after both the attempt count and retry duration are satisfied; `0s` means unlimited duration and must not be used here. The positive `1s` duration is already satisfied before the first retry because the minimum backoff is 10 seconds, so `--max-attempts=3` becomes the effective hard dispatch-attempt bound. The attempt that first discovers an ambiguous relay result durably records `FAILED/EXECUTE` and returns non-2xx. A redelivery that observes that already-terminal state returns a 2xx non-retryable acknowledgment without invoking the relay or appending an event. Completed deliveries are also acknowledged with 2xx.
 
 Cloud Task bodies must contain only `schema_version`, `case_id`, and `outbox_id`. Private answers, model text, evidence, claimant links, tokens, and signed URLs never belong in task payloads or task names. Production Cloud Tasks publication/replay receipts are payload-free; only the explicit local inline adapter returns that opaque body for manual development delivery.
 
@@ -174,6 +226,7 @@ $SecretPrompts = [ordered]@{
     'found-roll-supervisor-token' = 'Supervisor approval bearer token'
 }
 $SecretValues = [ordered]@{}
+$SecretVersions = [ordered]@{}
 $SeenValues = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 
 foreach ($Entry in $SecretPrompts.GetEnumerator()) {
@@ -191,8 +244,11 @@ try {
         try {
             $Bytes = [System.Text.UTF8Encoding]::new($false).GetBytes([string]$Entry.Value)
             [System.IO.File]::WriteAllBytes($TempPath, $Bytes)
-            gcloud secrets versions add $Entry.Key --data-file=$TempPath
-            if ($LASTEXITCODE -ne 0) { throw "Secret upload failed for $($Entry.Key)." }
+            $VersionName = gcloud secrets versions add $Entry.Key --data-file=$TempPath --format="value(name)"
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($VersionName)) { throw "Secret upload failed for $($Entry.Key)." }
+            $VersionNumber = ([string]$VersionName -split '/')[-1]
+            if ($VersionNumber -notmatch '^\d+$') { throw "Secret version was not a numeric resource version for $($Entry.Key)." }
+            $SecretVersions[$Entry.Key] = $VersionNumber
         } finally {
             if (Test-Path -LiteralPath $TempPath) {
                 $Length = (Get-Item -LiteralPath $TempPath).Length
@@ -224,7 +280,21 @@ gcloud secrets add-iam-policy-binding found-roll-evidence-staff-token --member="
 gcloud secrets add-iam-policy-binding found-roll-supervisor-token --member="serviceAccount:$AppServiceAccount" --role="roles/secretmanager.secretAccessor"
 ```
 
-Do not print secret versions during verification. Check only that the expected secret reference is mounted on the Cloud Run revision.
+Do not print secret values during verification. Numeric version identifiers are non-secret deployment metadata; retain them only in the private deployment receipt and pin every Cloud Run mapping to the captured numeric version rather than `latest`.
+
+Each secret should have exactly one active version after initial setup. During rotation, deploy and verify the replacement numeric version first, then destroy every superseded numeric version; leaving an old version `DISABLED` still counts it as active for Secret Manager pricing. Destruction is irreversible. Before running it, enumerate every traffic-serving and retained rollback revision and prove none references the old version.
+
+```powershell
+$SecretName = "found-roll-secret-pepper"
+$SupersededVersion = "<numeric-version-after-replacement-is-serving>"
+if ($SupersededVersion -notmatch '^\d+$') { throw 'Set the exact superseded numeric secret version.' }
+gcloud secrets versions list $SecretName --format="table(name,state,createTime)"
+# First inspect every protected revision's exported secretKeyRef entries and stop if any still use $SupersededVersion.
+gcloud secrets versions destroy $SupersededVersion --secret=$SecretName
+gcloud secrets versions list $SecretName --format="table(name,state,createTime)"
+```
+
+Eight current versions still mean this deployment is not Always Free; the unupgraded Free Trial, not the Secret Manager allowance, is the zero-real-money boundary.
 
 ## Prepare the simulator contract
 
@@ -256,11 +326,82 @@ npm run test:sites
 
 Record the independently executed suite counts from this frozen commit in the release receipt. Do not copy prose-era counts into the receipt.
 
+### Inventory source-build artifacts
+
+Every `--source` deploy invokes Cloud Build and can create a staging object plus an Artifact Registry image. Inventory the dedicated project before the first deploy and after every deploy; do not assume an Artifact Registry or Cloud Storage allowance will absorb accumulation.
+
+```powershell
+gcloud builds list --project=$ProjectId --sort-by=~createTime
+$ProjectBuckets = @(gcloud storage buckets list --project=$ProjectId --format="value(name)")
+foreach ($ProjectBucket in $ProjectBuckets) {
+    gcloud storage du --summarize --all-versions "gs://$ProjectBucket"
+    gcloud storage ls --recursive --long "gs://$ProjectBucket/**"
+}
+gcloud artifacts repositories list --project=$ProjectId --location=$Region
+```
+
+After the first source deploy creates the standard repository, inventory every image digest and tag:
+
+```powershell
+$SourceRepository = "$Region-docker.pkg.dev/$ProjectId/cloud-run-source-deploy"
+gcloud artifacts docker images list $SourceRepository --include-tags --sort-by=~UPDATE_TIME
+```
+
+After both services are verified, protect every revision receiving traffic, each latest-ready revision, and every explicitly retained last-good rollback revision. Never infer safety from only the latest revision. For every older or untagged digest, prove it is absent from the complete protected-image set before deleting that exact digest rather than a repository or wildcard:
+
+```powershell
+$RetainedRollbackRevisions = @() # Add exact last-good app/simulator revision names before cleanup when they exist.
+$ProtectedRevisions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($Service in @($AppService, $SimulatorService)) {
+    $ServiceState = gcloud run services describe $Service --region=$Region --format=json | ConvertFrom-Json
+    [void]$ProtectedRevisions.Add([string]$ServiceState.status.latestReadyRevisionName)
+    foreach ($TrafficTarget in @($ServiceState.status.traffic)) {
+        if (-not [string]::IsNullOrWhiteSpace($TrafficTarget.revisionName)) {
+            [void]$ProtectedRevisions.Add([string]$TrafficTarget.revisionName)
+        }
+    }
+}
+foreach ($Revision in $RetainedRollbackRevisions) {
+    if (-not [string]::IsNullOrWhiteSpace($Revision)) { [void]$ProtectedRevisions.Add([string]$Revision) }
+}
+
+$ProtectedImages = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($Revision in $ProtectedRevisions) {
+    $Image = gcloud run revisions describe $Revision --region=$Region --format="value(spec.containers[0].image)"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Image)) { throw "Could not resolve protected revision $Revision." }
+    [void]$ProtectedImages.Add(([string]$Image).Trim())
+}
+
+$CandidateImage = "<exact-non-serving-image>@sha256:<digest>"
+if ($CandidateImage -match '[<>]' -or $CandidateImage -notmatch '@sha256:[a-f0-9]{64}$') { throw 'Set one exact digest-qualified cleanup candidate.' }
+if ($ProtectedImages.Contains($CandidateImage)) { throw "Refusing to delete protected image $CandidateImage." }
+gcloud artifacts docker images delete $CandidateImage --delete-tags
+```
+
+Use a filled `$CompletedBuildId` with `gcloud builds describe $CompletedBuildId --format="yaml(id,status,source,images,artifacts)"` to bind each staging object to a completed build. Delete only an exact, completed, noncanonical source object with a filled `$StagingObject` and `gcloud storage rm $StagingObject`. Repeat the untruncated build list, recursive object inventory, bucket byte totals, and image inventory afterward and preserve the redacted result. Never delete a protected serving/rollback digest or use automated wildcard deletion.
+
 Deploy the app revision before changing the simulator. On this transitional revision only, set `FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=true`. That flag accepts a missing legacy field but still rejects an explicit `environment=development`. The exact HTTPS app and simulator origins are supplied on the first production deploy, not discovered by a follow-up update:
 
 ```powershell
-gcloud run deploy $AppService --source . --region=$Region --service-account=$AppServiceAccount --allow-unauthenticated --min-instances=0 --max-instances=1 --cpu=1 --memory=512Mi --cpu-throttling --no-cpu-boost --concurrency=8 --set-env-vars="FOUND_ROLL_ENV=production,FOUND_ROLL_REPOSITORY=firestore,FOUND_ROLL_EVIDENCE_STORE=gcs,FOUND_ROLL_ANALYST_MODE=vertex_adk,FOUND_ROLL_INVENTORY_MODE=http,FOUND_ROLL_INVENTORY_BASE_URL=$SimulatorUrl,FOUND_ROLL_INVENTORY_TIMEOUT_SECONDS=3.0,FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=true,FOUND_ROLL_RELAY_MODE=http,FOUND_ROLL_TASKS_MODE=cloud,FOUND_ROLL_DEMO_MODE=true,FOUND_ROLL_REQUIRE_TASK_HEADER=true,FOUND_ROLL_REQUIRE_TASK_OIDC=true,FOUND_ROLL_MODEL=$Model,GOOGLE_CLOUD_PROJECT=$ProjectId,GOOGLE_CLOUD_LOCATION=$ModelLocation,FOUND_ROLL_FIRESTORE_NAMESPACE=$FirestoreNamespace,FOUND_ROLL_RELAY_BASE_URL=$SimulatorUrl,FOUND_ROLL_TASK_QUEUE=$Queue,FOUND_ROLL_TASK_LOCATION=$Region,FOUND_ROLL_TASK_SERVICE_ACCOUNT=$TaskServiceAccount,FOUND_ROLL_EVIDENCE_BUCKET=$Bucket,FOUND_ROLL_STAFF_ACTOR_ID=$StaffActorId,FOUND_ROLL_SUPERVISOR_ACTOR_ID=$SupervisorActorId,FOUND_ROLL_PUBLIC_BASE_URL=$AppUrl,FOUND_ROLL_ALLOWED_ORIGINS=$HostedClientOrigin" --set-secrets="FOUND_ROLL_SECRET_PEPPER=found-roll-secret-pepper:latest,FOUND_ROLL_DEMO_ACCESS_TOKEN=found-roll-demo-access-token:latest,FOUND_ROLL_ADMIN_TOKEN=found-roll-admin-token:latest,FOUND_ROLL_EVIDENCE_STAFF_TOKEN=found-roll-evidence-staff-token:latest,FOUND_ROLL_SUPERVISOR_TOKEN=found-roll-supervisor-token:latest,FOUND_ROLL_RELAY_API_KEY=found-roll-simulator-api-key:latest,FOUND_ROLL_RELAY_SHARED_SECRET=found-roll-simulator-callback-secret:latest"
-gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].env)"
+gcloud run deploy $AppService `
+    --source . `
+    --region=$Region `
+    --service-account=$AppServiceAccount `
+    --allow-unauthenticated `
+    --scaling=auto `
+    --min=0 `
+    --max=1 `
+    --min-instances=0 `
+    --max-instances=1 `
+    --timeout=120s `
+    --cpu=1 `
+    --memory=512Mi `
+    --cpu-throttling `
+    --no-cpu-boost `
+    --concurrency=8 `
+    --set-env-vars="FOUND_ROLL_ENV=production,FOUND_ROLL_REPOSITORY=firestore,FOUND_ROLL_EVIDENCE_STORE=gcs,FOUND_ROLL_ANALYST_MODE=vertex_adk,FOUND_ROLL_INVENTORY_MODE=http,FOUND_ROLL_INVENTORY_BASE_URL=$SimulatorUrl,FOUND_ROLL_INVENTORY_TIMEOUT_SECONDS=3.0,FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=true,FOUND_ROLL_RELAY_MODE=http,FOUND_ROLL_TASKS_MODE=cloud,FOUND_ROLL_DEMO_MODE=true,FOUND_ROLL_REQUIRE_TASK_HEADER=true,FOUND_ROLL_REQUIRE_TASK_OIDC=true,FOUND_ROLL_MODEL=$Model,GOOGLE_CLOUD_PROJECT=$ProjectId,GOOGLE_CLOUD_LOCATION=$ModelLocation,FOUND_ROLL_FIRESTORE_NAMESPACE=$FirestoreNamespace,FOUND_ROLL_RELAY_BASE_URL=$SimulatorUrl,FOUND_ROLL_TASK_QUEUE=$Queue,FOUND_ROLL_TASK_LOCATION=$Region,FOUND_ROLL_TASK_SERVICE_ACCOUNT=$TaskServiceAccount,FOUND_ROLL_EVIDENCE_BUCKET=$Bucket,FOUND_ROLL_STAFF_ACTOR_ID=$StaffActorId,FOUND_ROLL_SUPERVISOR_ACTOR_ID=$SupervisorActorId,FOUND_ROLL_PUBLIC_BASE_URL=$AppUrl,FOUND_ROLL_ALLOWED_ORIGINS=$HostedClientOrigin" `
+    --set-secrets="FOUND_ROLL_SECRET_PEPPER=found-roll-secret-pepper:$($SecretVersions['found-roll-secret-pepper']),FOUND_ROLL_DEMO_ACCESS_TOKEN=found-roll-demo-access-token:$($SecretVersions['found-roll-demo-access-token']),FOUND_ROLL_ADMIN_TOKEN=found-roll-admin-token:$($SecretVersions['found-roll-admin-token']),FOUND_ROLL_EVIDENCE_STAFF_TOKEN=found-roll-evidence-staff-token:$($SecretVersions['found-roll-evidence-staff-token']),FOUND_ROLL_SUPERVISOR_TOKEN=found-roll-supervisor-token:$($SecretVersions['found-roll-supervisor-token']),FOUND_ROLL_RELAY_API_KEY=found-roll-simulator-api-key:$($SecretVersions['found-roll-simulator-api-key']),FOUND_ROLL_RELAY_SHARED_SECRET=found-roll-simulator-callback-secret:$($SecretVersions['found-roll-simulator-callback-secret'])"
+gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.containers[0].env)"
 ```
 
 Confirm the described service URL or mapped origin is the configured `$AppUrl`, and that the compatible app revision is ready before continuing. A temporary 503 inventory-readiness result against an absent bootstrap simulator is acceptable only during a new-project rollout; the app process itself must start, and no canonical case may begin yet.
@@ -270,16 +411,33 @@ Confirm the described service URL or mapped origin is the configured `$AppUrl`, 
 Only after the compatible app revision is serving, deploy the simulator with production fail-closed validation:
 
 ```powershell
-gcloud run deploy $SimulatorService --source .\simulator --region=$Region --service-account=$SimulatorServiceAccount --allow-unauthenticated --min-instances=0 --max-instances=1 --cpu=1 --memory=512Mi --cpu-throttling --no-cpu-boost --concurrency=8 --set-env-vars="SIMULATOR_ENV=production" --set-secrets="SIMULATOR_API_KEY=found-roll-simulator-api-key:latest,SIMULATOR_TOKEN_SECRET=found-roll-simulator-token-secret:latest,SIMULATOR_CALLBACK_SECRET=found-roll-simulator-callback-secret:latest"
-gcloud run services describe $SimulatorService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].env)"
+gcloud run deploy $SimulatorService `
+    --source .\simulator `
+    --region=$Region `
+    --service-account=$SimulatorServiceAccount `
+    --allow-unauthenticated `
+    --scaling=auto `
+    --min=0 `
+    --max=1 `
+    --min-instances=0 `
+    --max-instances=1 `
+    --timeout=20s `
+    --cpu=1 `
+    --memory=512Mi `
+    --cpu-throttling `
+    --no-cpu-boost `
+    --concurrency=8 `
+    --set-env-vars="SIMULATOR_ENV=production" `
+    --set-secrets="SIMULATOR_API_KEY=found-roll-simulator-api-key:$($SecretVersions['found-roll-simulator-api-key']),SIMULATOR_TOKEN_SECRET=found-roll-simulator-token-secret:$($SecretVersions['found-roll-simulator-token-secret']),SIMULATOR_CALLBACK_SECRET=found-roll-simulator-callback-secret:$($SecretVersions['found-roll-simulator-callback-secret'])"
+gcloud run services describe $SimulatorService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.containers[0].env)"
 Invoke-RestMethod "$SimulatorUrl/healthz"
 Invoke-RestMethod "$AppUrl/healthz"
-gcloud run services update $AppService --region=$Region --update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"
-gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].env)"
+gcloud run services update $AppService --region=$Region --scaling=auto --min=0 --max=1 --min-instances=0 --max-instances=1 --timeout=120s --update-env-vars="FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT=false"
+gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.containers[0].env)"
 Invoke-RestMethod "$AppUrl/healthz"
 ```
 
-The observed simulator URL or mapped origin must equal the already configured `$SimulatorUrl`. Its health payload must report `data.environment=production`; the app health probe must accept that exact envelope and return ready both before and after the compatibility flag is removed. The frozen release receipt must show the flag as `false`. `--allow-unauthenticated` makes the fictional simulator read API and health route reachable for the demo; every mutation still fails closed on its bearer API key. `SIMULATOR_ENV=production` also makes startup fail if the API, token, or callback secret is missing, shorter than 24 characters, a placeholder, or reused across purposes. `--max-instances=1` is mandatory because this resettable simulator keeps process-local fixture state. This is acceptable only for one synthetic demonstration and is not a persistence or scalability design. A real custodian integration must be private, durable, and use workload identity/OIDC rather than a long-lived bearer key.
+The observed simulator URL or mapped origin must equal the already configured `$SimulatorUrl`. Its health payload must report `data.environment=production`; the app health probe must accept that exact envelope and return ready both before and after the compatibility flag is removed. The frozen release receipt must show the flag as `false`. `--allow-unauthenticated` makes the fictional simulator read API and health route reachable for the demo; every mutation still fails closed on its bearer API key. `SIMULATOR_ENV=production` also makes startup fail if the API, token, or callback secret is missing, shorter than 24 characters, a placeholder, or reused across purposes. `--scaling=auto` prevents inherited manual scaling. Both service-level `--max=1` and revision-level `--max-instances=1` are mandatory because this resettable simulator keeps process-local fixture state; `--min=0` and `--min-instances=0` prevent idle instances, and `--timeout=20s` bounds each simulator request. Concurrency eight limits simultaneous requests within the one allowed instance; it is not an instance cap. This is acceptable only for one synthetic demonstration and is not a persistence or scalability design. A real custodian integration must be private, durable, and use workload identity/OIDC rather than a long-lived bearer key.
 
 The public origin does not make rich custody data public. In production, passport snapshots, events, candidates, manifests, and the demo snapshot require `X-Found-Roll-Staff-Token`. General demo mutations use `X-Found-Roll-Demo-Token`; staff evidence, identity attestation, and release also use the staff credential; intake, claimant-link issuance, and duplicate release-task delivery require both; approval uses `X-Found-Roll-Supervisor-Token`; and claimant evidence uses the one-time `X-Found-Roll-Claim-Link` against a purpose-built coarse projection. Before loading any rich projection, the browser calls `GET /api/v1/auth/runtime-roles` with all three reusable headers; the endpoint validates them strictly even in development, mutates nothing, and returns the configured actor IDs with no-store headers. The server records those exact actors and rejects a conflicting optional legacy actor field. Empty, partial, or rejected browser configuration clears the whole in-memory private session. Reset and outbox reconciliation use `X-Found-Roll-Admin-Token` from authenticated terminal/Cloud Shell tooling only. Keep the deployment in the dedicated `_synthetic_demo` namespace, use narrow CORS, cap instances, and disclose that these demo credentials are not production identity.
 
@@ -322,19 +480,34 @@ Health and revision identity:
 ```powershell
 Invoke-RestMethod "$AppUrl/healthz"
 Invoke-RestMethod "$SimulatorUrl/healthz"
-gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,spec.template.spec.serviceAccountName)"
-gcloud run services describe $SimulatorService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,spec.template.spec.serviceAccountName)"
+gcloud run services describe $AppService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.serviceAccountName,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)"
+gcloud run services describe $SimulatorService --region=$Region --format="yaml(status.url,status.latestReadyRevisionName,metadata.annotations,spec.template.metadata.annotations,spec.template.spec.timeoutSeconds,spec.template.spec.serviceAccountName,spec.template.spec.containerConcurrency,spec.template.spec.containers[0].resources)"
 ```
+
+For each service, the service metadata must show `run.googleapis.com/scalingMode: automatic` and `run.googleapis.com/maxScale: '1'`; `run.googleapis.com/minScale` must be absent or `0`, which is the service default produced by `--min=0`. The revision-template annotations must show `autoscaling.knative.dev/minScale: '0'`, `autoscaling.knative.dev/maxScale: '1'`, `run.googleapis.com/cpu-throttling: 'true'`, and `run.googleapis.com/startup-cpu-boost: 'false'`. The app revision must show `timeoutSeconds: 120`; the simulator must show `timeoutSeconds: 20`. Also confirm one CPU, 512 MiB, and concurrency eight. Save these complete redacted descriptions with the release evidence. Concurrency is only the within-instance request limit; service-level `maxScale` is the true service instance cap. A service cap can briefly be exceeded while Cloud Run handles traffic spikes, which is why the separate Cloud Run spend cap and the unupgraded Free Trial remain mandatory.
 
 The app health response must report `environment=production`, `demo_mode=true`, `vertex_adk`, `gemini-3.5-flash`, `prompt_version=found-roll-case-analyst-prompt-v1`, `output_schema_version=found-roll-analysis-proposal-v1`, `policy_version=found-roll-release-v1`, `firestore`, `cloud`, `inventory_mode=http`, `inventory_gateway_ready=true`, `inventory_legacy_health_compatibility=false`, `relay_mode=http`, and every production auth/task guard enabled. Inventory readiness is a bounded live probe that validates the simulator's exact `SIMULATED` header and health envelope; a configured URL alone is not ready. The simulator health response must permanently disclose `SIMULATED` and must not echo any secret.
 
 Resource state:
 
 ```powershell
-gcloud tasks queues describe $Queue --location=$Region
+gcloud tasks queues describe $Queue --location=$Region --format="yaml(state,rateLimits,retryConfig)"
 gcloud firestore databases describe --database="(default)"
-gcloud storage buckets describe "gs://$Bucket"
+gcloud storage buckets describe "gs://$Bucket" --format="yaml(name,location,iamConfiguration,lifecycle,versioning,softDeletePolicy)"
+gcloud storage du --summarize --all-versions "gs://$Bucket"
+gcloud builds list --project=$ProjectId --sort-by=~createTime
+$ProjectBuckets = @(gcloud storage buckets list --project=$ProjectId --format="value(name)")
+foreach ($ProjectBucket in $ProjectBuckets) {
+    gcloud storage du --summarize --all-versions "gs://$ProjectBucket"
+    gcloud storage ls --recursive --long "gs://$ProjectBucket/**"
+}
+gcloud artifacts repositories list --project=$ProjectId --location=$Region
+gcloud artifacts docker images list $SourceRepository --include-tags --sort-by=~UPDATE_TIME
 ```
+
+The queue receipt must show one concurrent dispatch, one dispatch per second, three maximum attempts, a positive one-second maximum retry duration, 10-second minimum backoff, 60-second maximum backoff, and two doublings. Re-run the numeric under-5-GiB assertion from the storage section rather than relying on the human-readable output. The bucket receipt must show the after-judging deletion lifecycle, no versioning, and no positive soft-delete retention. The build/artifact inventory must retain only the protected serving/rollback images plus any exact staging object still needed for a protected completed build.
+
+Keep the redacted Billing Overview, Cloud Run spend-cap, and Gemini/Agent Platform spend-cap receipts alongside the private release evidence. The offline verifier intentionally does not query Billing; it fails closed unless the entrant explicitly confirms exact `free_trial` account type, remaining credit, remaining time, no paid activation, and both enabled spend caps.
 
 Security negatives must all fail safely:
 
@@ -413,8 +586,42 @@ Copy `docs/submission-release.template.json` to ignored `artifacts/private/submi
 node scripts/verify-submission-readiness.mjs --record artifacts/private/submission-release.json
 ```
 
-The command is deliberately offline. It verifies local Git, source and artifact hashes, receipt structure, cross-run identity, and placeholder removal; public reachability, judge access, the continuous video, eligibility, ownership, truthfulness, and visual/media privacy remain explicit attestations that must be checked by the entrant.
+The command is deliberately offline. It verifies local Git, source and artifact hashes, receipt structure, cross-run identity, placeholder removal, exact `billing_account_type: "free_trial"`, and explicit confirmation of remaining trial credit/time, absence of paid activation, and both service spend caps. It does not query Google Cloud or infer account type from `billing_enabled`; retain the Billing Overview and spend-cap receipts as the evidence for those confirmations. Public reachability, judge access, the continuous video, eligibility, ownership, truthfulness, and visual/media privacy remain explicit attestations that must be checked by the entrant.
 
 No service-account private key is needed at any stage of this runbook.
 
-Deployment and publication remain blocked until the active Free Trial account is verified, the frozen run set supplies live Gemini and Google ADK receipts plus Google Cloud resource/revision evidence, the repository/tag has verified judge access, and the public sub-four-minute video URL exists. The research-informed story mode is already confirmed. Local green counts cannot replace any live artifact.
+Deployment and publication remain blocked until the active unupgraded Free Trial account and both service spend caps are verified, the frozen run set supplies live Gemini and Google ADK receipts plus Google Cloud resource/revision evidence, the repository/tag has verified judge access, and the public sub-four-minute video URL exists. The research-informed story mode is already confirmed. Local green counts cannot replace any live artifact.
+
+## After judging: teardown
+
+After the announced judging and access-retention period ends, preserve the redacted receipts locally, then remove the synthetic evidence and the entire dedicated project. This is the authoritative teardown; lifecycle deletion and spend caps are only backstops. Resolve and compare the exact project ID before either destructive command, and stop if it is not the dedicated project recorded in the frozen release record.
+
+```powershell
+$ActiveProject = gcloud config get-value project
+if ($ActiveProject -ne $ProjectId) { throw "Refusing teardown: active project '$ActiveProject' is not '$ProjectId'." }
+gcloud projects describe $ProjectId --format="yaml(projectId,name,lifecycleState)"
+gcloud storage du --summarize --all-versions "gs://$Bucket"
+gcloud artifacts repositories list --project=$ProjectId --location=$Region
+gcloud storage rm --recursive "gs://$Bucket/"
+if ($LASTEXITCODE -ne 0) { throw 'Evidence deletion failed; project teardown stopped.' }
+gcloud projects delete $ProjectId
+if ($LASTEXITCODE -ne 0) { throw 'Dedicated-project deletion was not accepted.' }
+$DescribeOutput = (& gcloud projects describe $ProjectId --format=json 2>&1 | Out-String).Trim()
+$DescribeExitCode = $LASTEXITCODE
+$TeardownReceipt = [ordered]@{
+    schema_version = "1"
+    project_id = $ProjectId
+    deletion_command_accepted = $true
+    post_delete_describe_exit_code = $DescribeExitCode
+    post_delete_describe_output = $DescribeOutput
+    recorded_at_utc = [DateTimeOffset]::UtcNow.ToString('o')
+}
+$TeardownReceiptJson = $TeardownReceipt | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText(
+    (Join-Path $PWD "artifacts/private/project-teardown-receipt.json"),
+    "$TeardownReceiptJson`n",
+    [System.Text.UTF8Encoding]::new($false)
+)
+```
+
+With versioning and soft delete disabled, `gcloud storage rm --recursive` removes the ordinary evidence objects; project deletion then removes the bucket, Cloud Run services, builds, Artifact Registry images, queue, secrets, IAM bindings, Firestore database, logs, and remaining project-scoped resources. Both actions are irreversible for this demo workflow. Do not run them before judging finishes, against a shared project, or before the local receipts are preserved. The ignored teardown receipt always records the exact project ID, the describe exit code, and either the deletion lifecycle response or the exact not-found output; it must never be an empty file. Confirm neither public URL still serves.

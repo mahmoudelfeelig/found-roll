@@ -11,7 +11,7 @@
   },
   "failed_count": 0,
   "fixture_count": 15,
-  "generated_at": "2026-08-29T22:52:07.495409+00:00",
+  "generated_at": "2026-08-29T23:59:04.637632+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",
@@ -192,6 +192,7 @@
           "agent_type": "LlmAgent",
           "live_trajectory_observed": false,
           "max_llm_calls_cap": 8,
+          "max_output_tokens_cap": 2048,
           "mode": "single_turn",
           "model": "gemini-3.5-flash",
           "network_calls": 0,
@@ -334,15 +335,18 @@
       "execution_mode": "local_deterministic_fixture",
       "id": "FR-015",
       "observed": {
-        "automatic_retry_status": 409,
         "final_state": "RECONCILIATION_REQUIRED",
+        "manual_action_required": true,
         "outbox_status": "FAILED",
         "relay_calls": 1,
-        "retry_event_delta": 0
+        "retry_event_delta": 0,
+        "retryable": false,
+        "terminal_ack_status": 200,
+        "terminal_failure_acknowledged": true
       },
       "passed": true,
       "runner": "ambiguous_relay_reconciliation",
-      "title": "Ambiguous relay outcome enters reconciliation and will not auto-retry"
+      "title": "Ambiguous relay outcome enters reconciliation and acknowledges terminal redelivery"
     }
   ],
   "schema_version": "2.0",

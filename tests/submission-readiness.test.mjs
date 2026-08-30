@@ -440,6 +440,157 @@ async function createFixture(t) {
       .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
   };
   const frontendManifestRaw = `${JSON.stringify(frontendManifest, null, 2)}\n`;
+  const localRunners = [
+    "full_happy_path",
+    "state_graph",
+    "visual_only_policy",
+    "valuable_human_gates",
+    "sensitive_policy",
+    "dangerous_pre_intake",
+    "wrong_answer_review",
+    "fixture_analyst_canonical",
+    "fixture_analyst_route_conflict",
+    "fixture_analyst_no_eligible",
+    "stale_case_version",
+    "duplicate_analysis_task",
+    "publication_privacy",
+    "token_replay",
+    "ambiguous_relay_reconciliation",
+  ];
+  const localFixtureRows = localRunners.map((runner, index) => ({
+    id: `FR-${String(index + 1).padStart(3, "0")}`,
+    title: `Local fixture ${index + 1}`,
+    runner,
+  }));
+  const localExecutionBoundary = {
+    repository: "in-memory",
+    analyst: "deterministic FixtureCaseAnalyst",
+    tasks: "inline",
+    relay: "in-process fixture",
+    network: "FastAPI TestClient in-process",
+    gemini_calls: 0,
+    google_cloud_calls: 0,
+    claim: "Local deterministic behavior only.",
+  };
+  const localFixtureManifestRaw = `${JSON.stringify({
+    schema_version: "2.0",
+    suite_id: "found-roll-local-safety-v2",
+    execution_boundary: localExecutionBoundary,
+    fixtures: localFixtureRows,
+    live_only_requirements: ["Live Google Cloud evidence remains required."],
+  })}\n`;
+  const localEvaluationRaw = `${JSON.stringify({
+    schema_version: "2.0",
+    suite_id: "found-roll-local-safety-v2",
+    status: "LOCAL_PASS_CANONICAL_INCOMPLETE",
+    fixture_count: 15,
+    passed_count: 15,
+    failed_count: 0,
+    execution_boundary: localExecutionBoundary,
+    results: localFixtureRows.map((fixture) => ({
+      id: fixture.id,
+      title: fixture.title,
+      runner: fixture.runner,
+      execution_mode: "local_deterministic_fixture",
+      passed: true,
+      observed: fixture.id === "FR-008"
+        ? { local_adk_construction_contract: { max_llm_calls_cap: 8, max_output_tokens_cap: 2048, live_trajectory_observed: false } }
+        : fixture.id === "FR-015"
+          ? { final_state: "RECONCILIATION_REQUIRED", outbox_status: "FAILED", relay_calls: 1, retry_event_delta: 0, terminal_ack_status: 200, terminal_failure_acknowledged: true, retryable: false, manual_action_required: true }
+          : {},
+    })),
+  })}\n`;
+  const privacyCanaryManifest = '{"schema_version":"1","canaries":[]}\n';
+  const privacyCanaryManifestSha256 = sha256(privacyCanaryManifest);
+  const localPrivacyScanReceipt = `${JSON.stringify({
+    schema_version: "1.0",
+    status: "PASS",
+    canary_count: 0,
+    finding_count: 0,
+    finding_values_included: false,
+    findings_by_rule: {},
+    recorded_findings: [],
+    scanned_byte_count: 1,
+    scanned_file_count: 1,
+    skipped_large_file_count: 0,
+    decode_replacement_count: 0,
+    manifest_sha256: privacyCanaryManifestSha256,
+  })}\n`;
+  const preparationScript = "param()\n# frozen preparation source\n";
+  const localInventoryReceipt = `${JSON.stringify({
+    schema_version: "1",
+    result: "passed",
+    gateway_mode: "http",
+    transport: "real_loopback_http",
+    simulator_disclosure_required: "SIMULATED",
+    authorized_tenant_count: 3,
+    authorized_candidate_ids: ["GH-PCH-104", "ML-PCH-219", "NA-PCH-231"],
+    restricted_fields_included: false,
+    unauthorized_candidate_denied: true,
+    unauthorized_tenant_denied: true,
+  })}\n`;
+  const localPreparationReceipt = `${JSON.stringify({
+    schema_version: "2",
+    status: "PREPARED_FOR_ANALYSIS",
+    canonical: false,
+    preparation_script_sha256: sha256(preparationScript),
+    case_id: "FR-20260829-0042",
+    case_state: "RECEIVED",
+    analyst_mode: "fixture",
+    inventory_mode: "http",
+    inventory_gateway_ready: true,
+    repository: "memory",
+    evidence_store: "memory",
+    tasks_mode: "inline",
+    relay_mode: "http",
+    app_environment: "development",
+    runtime_roles_authenticated: true,
+    staff_actor_id: "staff.northport",
+    supervisor_actor_id: "supervisor.northport",
+    simulator_disclosure: "SIMULATED",
+    simulator_environment: "development",
+    reset_event_count: 1,
+    evidence: {
+      source_file: "pouch-front.jpg",
+      original_sha256: sha256("pouch-front-fixture"),
+      preview_sha256: "a".repeat(64),
+      preview_visibility: "MODEL_AUTHORIZED",
+      current_epoch_record_count: 2,
+      active_for_analysis: true,
+      exact_retry_same_pair: true,
+      changed_consent_conflict_verified: true,
+    },
+  })}\n`;
+  const localWorkflowReceipt = `${JSON.stringify({
+    schema_version: "1",
+    result: "passed",
+    run_id: "fixture-local-run",
+    case_id: "FR-20260829-0042",
+    handoff_id: "handoff-fixture",
+    reservation_id: "reservation-fixture",
+    manifest_id: "manifest-fixture",
+    final_state: "CLOSED",
+    final_version: 19,
+    event_count: 19,
+    first_event_hash: "b".repeat(64),
+    final_event_hash: "c".repeat(64),
+    hash_chain_valid: true,
+    inventory_gateway_loopback_http: true,
+    inventory_gateway_authorized_candidate_count: 3,
+    imported_evidence_count: 2,
+    imported_evidence_provenance_verified: true,
+    runtime_role_probe_authenticated: true,
+    runtime_staff_actor_id: "staff.northport",
+    runtime_supervisor_actor_id: "supervisor.northport",
+    service_projection_authoritative: true,
+    token_replay_rejected: true,
+    token_replay_boundary_unchanged: true,
+    release_task_replayed: true,
+    release_task_boundary_unchanged: true,
+    manifest_internally_consistent: true,
+    physical_transfer_proven: false,
+    local_canonical_preparation_verified: true,
+  })}\n`;
   const frozenContents = new Map([
     ["README.md", readme],
     ["LICENSE", projectLicense],
@@ -460,13 +611,16 @@ async function createFixture(t) {
     ["public/assets/pouch-interior.jpg", "pouch-interior-fixture"],
     ["public/assets/pouch-rear.jpg", "pouch-rear-fixture"],
     ["public/assets/pouch-serial-detail.jpg", "pouch-serial-detail-fixture"],
-    ["evaluation/fixtures.json", '{"fixture_version":"camera-pouch-v1"}\n'],
-    ["evaluation/results.json", '{"status":"LOCAL_PASS_CANONICAL_INCOMPLETE","fixture_count":15,"passed_count":15,"failed_count":0}\n'],
-    ["evaluation/privacy-scan-results.json", '{"status":"PASS","finding_count":0,"skipped_large_file_count":0,"decode_replacement_count":0}\n'],
-    ["evaluation/privacy-scan-docs-results.json", '{"status":"PASS","finding_count":0,"skipped_large_file_count":0,"decode_replacement_count":0}\n'],
-    ["artifacts/verification/service-client-http-smoke-receipt.json", '{"result":"passed","final_state":"CLOSED","hash_chain_valid":true,"manifest_internally_consistent":true,"physical_transfer_proven":false}\n'],
+    ["evaluation/fixtures.json", localFixtureManifestRaw],
+    ["evaluation/privacy-canaries.json", privacyCanaryManifest],
+    ["evaluation/results.json", localEvaluationRaw],
+    ["evaluation/privacy-scan-results.json", localPrivacyScanReceipt],
+    ["evaluation/privacy-scan-docs-results.json", localPrivacyScanReceipt],
+    ["artifacts/verification/inventory-gateway-http-smoke-receipt.json", localInventoryReceipt],
+    ["artifacts/verification/local-canonical-preparation-receipt.json", localPreparationReceipt],
+    ["artifacts/verification/service-client-http-smoke-receipt.json", localWorkflowReceipt],
     ["artifacts/verification/frontend-build-manifest.json", frontendManifestRaw],
-    ["scripts/prepare-canonical-run.ps1", "param()\n# frozen preparation source\n"],
+    ["scripts/prepare-canonical-run.ps1", preparationScript],
     ["docs/architecture.md", architectureDocument],
     ["docs/architecture-diagram.mmd", architectureSource],
     ["docs/architecture-diagram.png", architectureRender],
@@ -610,6 +764,12 @@ async function createFixture(t) {
       project_id: "found-roll-demo-123",
       dedicated_project_confirmed: true,
       billing_enabled_confirmed: true,
+      billing_account_type: "free_trial",
+      free_trial_remaining_credit_confirmed: true,
+      free_trial_remaining_time_confirmed: true,
+      paid_activation_absent_confirmed: true,
+      cloud_run_spend_cap_confirmed: true,
+      agent_platform_spend_cap_confirmed: true,
       required_apis_enabled_confirmed: true,
       iam_ready_confirmed: true,
       quota_ready_confirmed: true,
@@ -721,6 +881,38 @@ test("a fully bound offline release record passes without network activity", asy
   const fixture = await createFixture(t);
   const result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.deepEqual(result, { ok: true, failures: [] });
+});
+
+test("cloud readiness requires an active free trial and both service spend caps", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.record.google_cloud.billing_account_type = "paid";
+  let result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("FREE_TRIAL_REQUIRED"), true);
+
+  fixture.record.google_cloud.billing_account_type = "free_trial";
+  for (const field of [
+    "free_trial_remaining_credit_confirmed",
+    "free_trial_remaining_time_confirmed",
+    "paid_activation_absent_confirmed",
+    "cloud_run_spend_cap_confirmed",
+    "agent_platform_spend_cap_confirmed",
+  ]) {
+    fixture.record.google_cloud[field] = false;
+    result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(
+      result.failures.some((failure) => failure.code === "CONFIRMATION_REQUIRED" && failure.message.includes(`google_cloud.${field}`)),
+      true,
+      `${field} must fail closed`,
+    );
+    fixture.record.google_cloud[field] = true;
+  }
+
+  delete fixture.record.google_cloud.agent_platform_spend_cap_confirmed;
+  result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(
+    result.failures.some((failure) => failure.code === "RECORD_MISSING_FIELD" && failure.message.includes("google_cloud.agent_platform_spend_cap_confirmed")),
+    true,
+  );
 });
 
 test("human confirmations, URLs, duration, placeholders, and Git state fail together", async (t) => {
@@ -936,6 +1128,55 @@ test("setup instructions and the architecture render must be substantive artifac
   const codes = failureCodes(result);
   assert.equal(codes.has("README_SETUP"), true);
   assert.equal(codes.has("ARCHITECTURE_BINDING"), true);
+});
+
+test("the bound deployment runbook must retain the zero-money retry safeguards", async (t) => {
+  const fixture = await createFixture(t);
+  const deploymentPath = path.join(fixture.repoRoot, "docs", "deployment.md");
+  const deployment = await readFile(deploymentPath, "utf8");
+  const unboundedDeployment = deployment.replaceAll("--max-retry-duration=1s", "--max-retry-duration=0s");
+  assert.notEqual(unboundedDeployment, deployment);
+  await writeFile(deploymentPath, unboundedDeployment, "utf8");
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(unboundedDeployment);
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("DEPLOYMENT_SETUP"), true);
+});
+
+test("local privacy receipts must bind the current canary manifest", async (t) => {
+  const fixture = await createFixture(t);
+  const receiptPath = path.join(fixture.repoRoot, "evaluation", "privacy-scan-results.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.manifest_sha256 = "f".repeat(64);
+  const rewritten = await writeJson(receiptPath, receipt);
+  fixture.record.frozen_files.find((binding) => binding.path === "evaluation/privacy-scan-results.json").sha256 = rewritten.digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("LOCAL_PRIVACY_CANARY_BINDING"), true);
+});
+
+test("local evaluation proof requires every unique frozen fixture row", async (t) => {
+  const fixture = await createFixture(t);
+  const evaluationPath = path.join(fixture.repoRoot, "evaluation", "results.json");
+  const evaluation = JSON.parse(await readFile(evaluationPath, "utf8"));
+  evaluation.results = evaluation.results.slice(0, 14);
+  const rewritten = await writeJson(evaluationPath, evaluation);
+  fixture.record.frozen_files.find((binding) => binding.path === "evaluation/results.json").sha256 = rewritten.digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("LOCAL_EVALUATION_INCOMPLETE"), true);
+});
+
+test("local workflow proof binds its preparation and inventory receipts", async (t) => {
+  const fixture = await createFixture(t);
+  const preparationPath = path.join(fixture.repoRoot, "artifacts", "verification", "local-canonical-preparation-receipt.json");
+  const preparation = JSON.parse(await readFile(preparationPath, "utf8"));
+  preparation.case_id = "FR-different-local-case";
+  const rewritten = await writeJson(preparationPath, preparation);
+  fixture.record.frozen_files.find((binding) => binding.path === "artifacts/verification/local-canonical-preparation-receipt.json").sha256 = rewritten.digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("LOCAL_WORKFLOW_INCOMPLETE"), true);
 });
 
 test("private repository mode requires both official judge accounts while public mode forbids the flags", async (t) => {

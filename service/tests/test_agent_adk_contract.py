@@ -30,6 +30,8 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     assert type(agent).__name__ == "LlmAgent"
     assert type(agent.model).__name__ == "Gemini"
     assert agent.model.model == "gemini-3.5-flash"
+    assert agent.generate_content_config is not None
+    assert agent.generate_content_config.max_output_tokens == 2048
     assert agent.output_schema is AnalysisProposal
     assert agent.instruction == CASE_ANALYST_INSTRUCTION
     assert len(agent.tools) == 5

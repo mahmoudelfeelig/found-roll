@@ -480,6 +480,15 @@ class CustodyService:
                     "outbox_publication_not_recovered",
                     "The committed command must be republished by an authorized operator before delivery.",
                 )
+            if outbox.failure_stage == OutboxFailureStage.EXECUTE:
+                return {
+                    "outbox": outbox,
+                    "case": CaseView.from_record(self.repository.get_case(outbox.case_id)),
+                    "replayed": False,
+                    "terminal_failure_acknowledged": True,
+                    "retryable": False,
+                    "manual_action_required": True,
+                }
             raise Conflict(
                 "outbox_execution_failed",
                 "The failed command requires manual reconciliation and cannot be redelivered automatically.",

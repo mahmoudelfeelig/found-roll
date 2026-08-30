@@ -59,9 +59,12 @@ const requiredFrozenFilePaths = [
   "public/assets/pouch-rear.jpg",
   "public/assets/pouch-serial-detail.jpg",
   "evaluation/fixtures.json",
+  "evaluation/privacy-canaries.json",
   "evaluation/results.json",
   "evaluation/privacy-scan-results.json",
   "evaluation/privacy-scan-docs-results.json",
+  "artifacts/verification/inventory-gateway-http-smoke-receipt.json",
+  "artifacts/verification/local-canonical-preparation-receipt.json",
   "artifacts/verification/service-client-http-smoke-receipt.json",
   "artifacts/verification/frontend-build-manifest.json",
   "scripts/prepare-canonical-run.ps1",
@@ -382,12 +385,32 @@ function validateReleaseRecord(record, failures) {
     "project_id",
     "dedicated_project_confirmed",
     "billing_enabled_confirmed",
+    "billing_account_type",
+    "free_trial_remaining_credit_confirmed",
+    "free_trial_remaining_time_confirmed",
+    "paid_activation_absent_confirmed",
+    "cloud_run_spend_cap_confirmed",
+    "agent_platform_spend_cap_confirmed",
     "required_apis_enabled_confirmed",
     "iam_ready_confirmed",
     "quota_ready_confirmed",
   ], failures)) {
     requireIdentifier(record.google_cloud.project_id, "release_record.google_cloud.project_id", failures, projectIdPattern);
-    for (const key of ["dedicated_project_confirmed", "billing_enabled_confirmed", "required_apis_enabled_confirmed", "iam_ready_confirmed", "quota_ready_confirmed"]) {
+    if (record.google_cloud.billing_account_type !== "free_trial") {
+      addFailure(failures, "FREE_TRIAL_REQUIRED", "release_record.google_cloud.billing_account_type must be exactly free_trial; paid, upgraded, expired, absent, or unverified billing is not authorized.");
+    }
+    for (const key of [
+      "dedicated_project_confirmed",
+      "billing_enabled_confirmed",
+      "free_trial_remaining_credit_confirmed",
+      "free_trial_remaining_time_confirmed",
+      "paid_activation_absent_confirmed",
+      "cloud_run_spend_cap_confirmed",
+      "agent_platform_spend_cap_confirmed",
+      "required_apis_enabled_confirmed",
+      "iam_ready_confirmed",
+      "quota_ready_confirmed",
+    ]) {
       requireTrue(record.google_cloud[key], `release_record.google_cloud.${key}`, failures);
     }
   }
@@ -780,10 +803,29 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/^## Submission freeze\s*$/m.test(deployment)
     || !/gcloud\s+run\s+deploy/i.test(deployment)
     || !/gcloud\s+services\s+enable/i.test(deployment)
+    || !/not Always Free/i.test(deployment)
+    || !/billing_account_type:\s*"free_trial"/i.test(deployment)
+    || !/Preview spend-cap/i.test(deployment)
+    || !/--scaling=auto/i.test(deployment)
+    || !/--max=1/i.test(deployment)
+    || !/--max-instances=1/i.test(deployment)
+    || !/--timeout=120s/i.test(deployment)
+    || !/--timeout=20s/i.test(deployment)
+    || !/--max-attempts=3/i.test(deployment)
+    || !/--max-retry-duration=1s/i.test(deployment)
+    || !/gcloud\s+secrets\s+versions\s+destroy/i.test(deployment)
+    || !/gcloud\s+artifacts\s+docker\s+images\s+delete/i.test(deployment)
+    || !/gcloud\s+storage\s+du\s+--summarize\s+--all-versions/i.test(deployment)
+    || !/--soft-delete-duration=0/i.test(deployment)
+    || !/--clear-soft-delete/i.test(deployment)
+    || !/softDeletePolicy/i.test(deployment)
+    || !/ProtectedRevisions/i.test(deployment)
+    || !/SecretVersions/i.test(deployment)
+    || !/gcloud\s+projects\s+delete/i.test(deployment)
     || !/scripts\/prepare-canonical-run\.ps1/i.test(deployment.replaceAll("\\", "/"))
     || !/verify-submission-readiness\.mjs/i.test(deployment)
   ) {
-    addFailure(failures, "DEPLOYMENT_SETUP", "docs/deployment.md must retain substantive Google Cloud deployment, verification, rollback, and freeze instructions.");
+    addFailure(failures, "DEPLOYMENT_SETUP", "docs/deployment.md must retain substantive zero-real-money, Google Cloud deployment, verification, cleanup, rollback, and freeze instructions.");
   }
 }
 
@@ -863,28 +905,180 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
     }
   }
 
-  const evaluation = parsedJson("evaluation/results.json");
-  if (evaluation && (
-    evaluation.status !== "LOCAL_PASS_CANONICAL_INCOMPLETE"
-    || evaluation.fixture_count !== 15
-    || evaluation.passed_count !== 15
-    || evaluation.failed_count !== 0
-  )) {
-    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/results.json must remain a truthful 15/15 local pass with canonical status incomplete.");
+  const expectedLocalIds = Array.from({ length: 15 }, (_, index) => `FR-${String(index + 1).padStart(3, "0")}`);
+  const fixtureManifest = parsedJson("evaluation/fixtures.json");
+  const fixtureRunnerById = new Map();
+  let fixtureManifestValid = fixtureManifest?.schema_version === "2.0"
+    && fixtureManifest?.suite_id === "found-roll-local-safety-v2"
+    && Array.isArray(fixtureManifest?.fixtures)
+    && fixtureManifest.fixtures.length === 15;
+  if (fixtureManifestValid) {
+    for (const fixture of fixtureManifest.fixtures) {
+      if (!expectedLocalIds.includes(fixture?.id) || fixtureRunnerById.has(fixture.id) || typeof fixture.runner !== "string" || fixture.runner.length < 3) {
+        fixtureManifestValid = false;
+        break;
+      }
+      fixtureRunnerById.set(fixture.id, fixture.runner);
+    }
+    fixtureManifestValid = fixtureManifestValid && expectedLocalIds.every((id) => fixtureRunnerById.has(id));
   }
+  if (fixtureManifest && !fixtureManifestValid) {
+    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/fixtures.json must define exactly one runner for every FR-001 through FR-015 fixture.");
+  }
+
+  const evaluation = parsedJson("evaluation/results.json");
+  let evaluationRowsValid = evaluation?.schema_version === "2.0"
+    && evaluation?.suite_id === "found-roll-local-safety-v2"
+    && evaluation?.status === "LOCAL_PASS_CANONICAL_INCOMPLETE"
+    && evaluation?.fixture_count === 15
+    && evaluation?.passed_count === 15
+    && evaluation?.failed_count === 0
+    && evaluation?.execution_boundary?.gemini_calls === 0
+    && evaluation?.execution_boundary?.google_cloud_calls === 0
+    && Array.isArray(evaluation?.results)
+    && evaluation.results.length === 15;
+  const evaluationById = new Map();
+  if (evaluationRowsValid) {
+    for (const result of evaluation.results) {
+      if (
+        !expectedLocalIds.includes(result?.id)
+        || evaluationById.has(result.id)
+        || result.passed !== true
+        || result.execution_mode !== "local_deterministic_fixture"
+        || result.runner !== fixtureRunnerById.get(result.id)
+      ) {
+        evaluationRowsValid = false;
+        break;
+      }
+      evaluationById.set(result.id, result);
+    }
+    evaluationRowsValid = evaluationRowsValid && expectedLocalIds.every((id) => evaluationById.has(id));
+  }
+  const boundedAgent = evaluationById.get("FR-008")?.observed?.local_adk_construction_contract;
+  const terminalTask = evaluationById.get("FR-015")?.observed;
+  if (
+    !evaluationRowsValid
+    || boundedAgent?.max_llm_calls_cap !== 8
+    || boundedAgent?.max_output_tokens_cap !== 2048
+    || boundedAgent?.live_trajectory_observed !== false
+    || terminalTask?.final_state !== "RECONCILIATION_REQUIRED"
+    || terminalTask?.outbox_status !== "FAILED"
+    || terminalTask?.terminal_ack_status !== 200
+    || terminalTask?.terminal_failure_acknowledged !== true
+    || terminalTask?.retryable !== false
+    || terminalTask?.manual_action_required !== true
+    || terminalTask?.relay_calls !== 1
+    || terminalTask?.retry_event_delta !== 0
+  ) {
+    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/results.json must contain one passing row for every frozen fixture and preserve the bounded-agent and terminal-task safety evidence.");
+  }
+
+  const privacyCanaryRecord = parsedJson("evaluation/privacy-canaries.json");
+  const privacyCanaryManifest = rawByPath.get("evaluation/privacy-canaries.json");
+  const privacyCanaryManifestSha256 = privacyCanaryManifest ? sha256(privacyCanaryManifest) : null;
+  const privacyCanaryCount = Array.isArray(privacyCanaryRecord?.canaries) ? privacyCanaryRecord.canaries.length : null;
   for (const relativePath of ["evaluation/privacy-scan-results.json", "evaluation/privacy-scan-docs-results.json"]) {
     const receipt = parsedJson(relativePath);
-    if (receipt && (receipt.status !== "PASS" || receipt.finding_count !== 0 || receipt.skipped_large_file_count !== 0 || receipt.decode_replacement_count !== 0)) {
+    if (receipt && (
+      receipt.schema_version !== "1.0"
+      || receipt.status !== "PASS"
+      || receipt.canary_count !== privacyCanaryCount
+      || receipt.finding_count !== 0
+      || receipt.finding_values_included !== false
+      || !receipt.findings_by_rule
+      || Object.keys(receipt.findings_by_rule).length !== 0
+      || !Array.isArray(receipt.recorded_findings)
+      || receipt.recorded_findings.length !== 0
+      || !Number.isInteger(receipt.scanned_byte_count)
+      || receipt.scanned_byte_count < 1
+      || !Number.isInteger(receipt.scanned_file_count)
+      || receipt.scanned_file_count < 1
+      || receipt.skipped_large_file_count !== 0
+      || receipt.decode_replacement_count !== 0
+    )) {
       addFailure(failures, "LOCAL_PRIVACY_INCOMPLETE", `${relativePath} must report a clean, complete UTF-8 scan.`);
     }
+    if (receipt && (typeof receipt.manifest_sha256 !== "string" || receipt.manifest_sha256.toLowerCase() !== privacyCanaryManifestSha256)) {
+      addFailure(failures, "LOCAL_PRIVACY_CANARY_BINDING", `${relativePath} must bind the current evaluation/privacy-canaries.json SHA-256.`);
+    }
   }
+
+  const localInventory = parsedJson("artifacts/verification/inventory-gateway-http-smoke-receipt.json");
+  if (localInventory && (
+    localInventory.schema_version !== "1"
+    || localInventory.result !== "passed"
+    || localInventory.gateway_mode !== "http"
+    || localInventory.transport !== "real_loopback_http"
+    || localInventory.simulator_disclosure_required !== "SIMULATED"
+    || !Array.isArray(localInventory.authorized_candidate_ids)
+    || new Set(localInventory.authorized_candidate_ids).size !== 3
+    || localInventory.authorized_tenant_count !== 3
+    || localInventory.restricted_fields_included !== false
+    || localInventory.unauthorized_candidate_denied !== true
+    || localInventory.unauthorized_tenant_denied !== true
+  )) {
+    addFailure(failures, "LOCAL_INVENTORY_INCOMPLETE", "The inventory-gateway receipt must prove a real loopback HTTP boundary, exact authorized scope, disclosure, and negative authorization checks.");
+  }
+
+  const localPreparation = parsedJson("artifacts/verification/local-canonical-preparation-receipt.json");
+  const preparationScript = rawByPath.get("scripts/prepare-canonical-run.ps1");
+  const pouchFront = rawByPath.get("public/assets/pouch-front.jpg");
+  if (localPreparation && (
+    localPreparation.schema_version !== "2"
+    || localPreparation.status !== "PREPARED_FOR_ANALYSIS"
+    || localPreparation.canonical !== false
+    || localPreparation.preparation_script_sha256 !== (preparationScript ? sha256(preparationScript) : null)
+    || localPreparation.case_state !== "RECEIVED"
+    || localPreparation.analyst_mode !== "fixture"
+    || localPreparation.inventory_mode !== "http"
+    || localPreparation.inventory_gateway_ready !== true
+    || localPreparation.repository !== "memory"
+    || localPreparation.evidence_store !== "memory"
+    || localPreparation.tasks_mode !== "inline"
+    || localPreparation.relay_mode !== "http"
+    || localPreparation.app_environment !== "development"
+    || localPreparation.runtime_roles_authenticated !== true
+    || localPreparation.simulator_disclosure !== "SIMULATED"
+    || localPreparation.simulator_environment !== "development"
+    || localPreparation.reset_event_count !== 1
+    || localPreparation.evidence?.source_file !== "pouch-front.jpg"
+    || localPreparation.evidence?.original_sha256 !== (pouchFront ? sha256(pouchFront) : null)
+    || !sha256Pattern.test(localPreparation.evidence?.preview_sha256 ?? "")
+    || localPreparation.evidence?.preview_visibility !== "MODEL_AUTHORIZED"
+    || localPreparation.evidence?.current_epoch_record_count !== 2
+    || localPreparation.evidence?.active_for_analysis !== true
+    || localPreparation.evidence?.exact_retry_same_pair !== true
+    || localPreparation.evidence?.changed_consent_conflict_verified !== true
+  )) {
+    addFailure(failures, "LOCAL_PREPARATION_INCOMPLETE", "The local preparation receipt must bind the frozen script/media and prove the fixture-only evidence boundary.");
+  }
+
   const localWorkflow = parsedJson("artifacts/verification/service-client-http-smoke-receipt.json");
   if (localWorkflow && (
-    localWorkflow.result !== "passed"
+    localWorkflow.schema_version !== "1"
+    || localWorkflow.result !== "passed"
     || localWorkflow.final_state !== "CLOSED"
+    || localWorkflow.final_version !== 19
+    || localWorkflow.event_count !== 19
+    || !sha256Pattern.test(localWorkflow.first_event_hash ?? "")
+    || !sha256Pattern.test(localWorkflow.final_event_hash ?? "")
     || localWorkflow.hash_chain_valid !== true
+    || localWorkflow.inventory_gateway_loopback_http !== true
+    || localWorkflow.inventory_gateway_authorized_candidate_count !== localInventory?.authorized_candidate_ids?.length
+    || localWorkflow.imported_evidence_count !== 2
+    || localWorkflow.imported_evidence_provenance_verified !== true
+    || localWorkflow.runtime_role_probe_authenticated !== true
+    || localWorkflow.runtime_staff_actor_id !== localPreparation?.staff_actor_id
+    || localWorkflow.runtime_supervisor_actor_id !== localPreparation?.supervisor_actor_id
+    || localWorkflow.service_projection_authoritative !== true
+    || localWorkflow.token_replay_rejected !== true
+    || localWorkflow.token_replay_boundary_unchanged !== true
+    || localWorkflow.release_task_replayed !== true
+    || localWorkflow.release_task_boundary_unchanged !== true
     || localWorkflow.manifest_internally_consistent !== true
     || localWorkflow.physical_transfer_proven !== false
+    || localWorkflow.local_canonical_preparation_verified !== true
+    || localWorkflow.case_id !== localPreparation?.case_id
   )) {
     addFailure(failures, "LOCAL_WORKFLOW_INCOMPLETE", "The authoritative local workflow receipt does not preserve the closed-chain safety boundary.");
   }

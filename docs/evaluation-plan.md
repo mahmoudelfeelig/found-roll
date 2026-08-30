@@ -33,14 +33,14 @@ This boundary is embedded in both fixture and result JSON. It must remain visibl
 | FR-005 | Mark the item sensitive despite otherwise complete evidence | Risk policy | `DENY` with specialist-policy reason |
 | FR-006 | Submit the dangerous branch at pre-intake | Intake API and safety boundary | No accepted intake, record, model call, or passport-count change |
 | FR-007 | Submit four wrong private answers through rotated one-time links | Claim-link lifecycle, claim-evidence API, wrong-attempt policy, event response | Every submission consumes its case/version-scoped link; rejected answers receive a replacement for the new version; fourth attempt reaches `MANUAL_REVIEW`; restricted values/digests stay absent |
-| FR-008 | Run the canonical candidate packet through the deterministic fixture analyst | Typed local analyst proposal | Canonical candidate selected, claim acceptance remains false, question is non-leading, restricted fields excluded |
+| FR-008 | Run the canonical candidate packet through the deterministic fixture analyst | Typed local analyst proposal | Canonical candidate selected, claim acceptance remains false, question is non-leading, restricted fields excluded, eight-call cap and 2,048-output-token cap preserved |
 | FR-009 | Make the highest-scoring candidate route-incompatible | Deterministic analyst hard filter | Incompatible candidate excluded; eligible runner-up selected; claim acceptance remains false |
 | FR-010 | Make every candidate ineligible | Deterministic analyst hard filter | Stable `no_eligible_candidates`; no invented candidate |
 | FR-011 | Submit claim evidence with a stale case version | Repository expected-version guard | HTTP 409 `stale_case_version`; zero event delta |
 | FR-012 | Deliver the same analysis task twice | Outbox/task idempotency | Second delivery is replayed; zero duplicate events |
 | FR-013 | Inject hostile instructions into untrusted evidence, then capture the opaque task plus staff/publication surfaces | Prompt-injection boundary, typed payload, response exclusion | Injected text cannot change ranking or authorize a claim; one bounded discriminator remains; task contains only schema/case/outbox IDs; no private answer or restricted hash/token fields; artifact is `fr-013-staff-publication-surfaces.json` |
 | FR-014 | Expire a claimant link, then present and replay a handoff credential | Claim-link expiry, credential consumption, repository mutation | Expired link returns `claim_link_expired` with zero event delta; first handoff presentation succeeds; replay returns `token_replayed` with zero event delta |
-| FR-015 | Inject an ambiguous relay outcome after release intent | Outbox failure and reconciliation guard | `RECONCILIATION_REQUIRED`; outbox `FAILED`; automatic retry rejected; relay called once |
+| FR-015 | Inject an ambiguous relay outcome after release intent | Outbox failure and reconciliation guard | `RECONCILIATION_REQUIRED`; outbox `FAILED/EXECUTE`; terminal redelivery acknowledged with non-retryable 200; relay called once and no event appended |
 
 The matrix is intentionally implementation-shaped. It does not relabel policy branch tests as independent real-world recovery cases, and it does not count deterministic analyst behavior as Gemini accuracy.
 
