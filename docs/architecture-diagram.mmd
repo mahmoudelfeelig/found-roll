@@ -6,7 +6,7 @@ flowchart LR
     Claimant["Claimant<br/>private proof"]
     Admin["Admin operator / automation<br/>separate admin credential<br/>reset outside browser"]
 
-    subgraph AppRun["Cloud Run: found-roll-app"]
+    subgraph AppRun["Found Roll — Cloud Run: found-roll-app"]
         StaffWeb["Vintage staff workspace"]
         ClaimWeb["Private proof page<br/>raw link token: URL fragment<br/>then tab memory only"]
         API["FastAPI case API<br/>separate credential boundaries"]

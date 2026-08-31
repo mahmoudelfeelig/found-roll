@@ -2,10 +2,10 @@
   "schema_version": "1",
   "renderer": "@mermaid-js/mermaid-cli@11.16.0",
   "source": "architecture-diagram.mmd",
-  "source_sha256": "3d8cd70460457dae3c29cbdc086c8b51c5e6ff38482ccec4b4be13019b252c7c",
+  "source_sha256": "1c6155c6c48be37f16e8221af54317dcb5f933fddd10853b9a6b4fab3c99a137",
   "render": "architecture-diagram.png",
-  "render_sha256": "3a8705c4b4206a65819eb4b400042e1cbf121d3dbb579b649ace044471d58f04",
-  "width": 3568,
-  "height": 1610,
+  "render_sha256": "a10f7015091be93050ae8310ead0ef6449a960f09f808476b5665ef255ecb6d6",
+  "width": 3536,
+  "height": 1596,
   "background": "white"
 }

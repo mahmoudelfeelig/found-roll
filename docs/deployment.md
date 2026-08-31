@@ -373,7 +373,7 @@ function ConvertTo-SanitizedObjectInventory {
             -not [int64]::TryParse([string]$CloudObject.size, [ref]$ObjectBytes) -or
             $ObjectBytes -lt 0
         ) { throw "Could not sanitize an object generation in gs://$BucketName." }
-        $SanitizedObjects += [ordered]@{
+        $SanitizedObjects += [pscustomobject][ordered]@{
             object_id_sha256 = Get-Sha256Hex -Value "$BucketName`n$ObjectName`n$Generation"
             generation = $Generation
             size_bytes = $ObjectBytes
@@ -1331,7 +1331,7 @@ function Write-ProjectStorageAuditReceipt {
             if ($CloudBuildLocations -notcontains $BuildLocation) {
                 throw "Cloud Build asset $BuildResource is outside the only authorized locations."
             }
-            $SanitizedBuildAssets += [ordered]@{
+            $SanitizedBuildAssets += [pscustomobject][ordered]@{
                 build_id = $BuildResourceMatch.Groups[2].Value
                 location = $BuildLocation
                 build_resource = "projects/$ProjectNumber/locations/$BuildLocation/builds/$($BuildResourceMatch.Groups[2].Value)"
@@ -1340,7 +1340,7 @@ function Write-ProjectStorageAuditReceipt {
         return @($SanitizedBuildAssets | Sort-Object build_resource)
     }
 
-    $BuildAssetSnapshotBeforeUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    $BuildAssetSnapshotBeforeUtc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString('o')
     $BuildAssetsBefore = @(Get-ProjectWideCloudBuildAssetInventory -SnapshotTime $BuildAssetSnapshotBeforeUtc)
     $BuildReceipts = @()
     foreach ($BuildLocation in $CloudBuildLocations) {
@@ -1392,7 +1392,7 @@ function Write-ProjectStorageAuditReceipt {
             }
             $BuildImageDigests = @($BuildImageDigests | Sort-Object -Unique)
             $BuildImageResources = @($BuildImageResources | Sort-Object -Unique)
-            $BuildReceipts += [ordered]@{
+            $BuildReceipts += [pscustomobject][ordered]@{
                 build_id = [string]$BuildState.id
                 location = $BuildLocation
                 build_resource = "projects/$ProjectNumber/locations/$BuildLocation/builds/$([string]$BuildState.id)"
@@ -1406,7 +1406,7 @@ function Write-ProjectStorageAuditReceipt {
         }
     }
     $BuildReceipts = @($BuildReceipts | Sort-Object build_resource)
-    $BuildAssetSnapshotAfterUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    $BuildAssetSnapshotAfterUtc = [DateTimeOffset]::UtcNow.UtcDateTime.ToString('o')
     $BuildAssetsAfter = @(Get-ProjectWideCloudBuildAssetInventory -SnapshotTime $BuildAssetSnapshotAfterUtc)
     $BuildReceiptIdentities = @(
         $BuildReceipts | ForEach-Object {
@@ -1419,7 +1419,7 @@ function Write-ProjectStorageAuditReceipt {
         if ($LASTEXITCODE -ne 0) { throw "Could not confirm the direct Cloud Build identity inventory in $BuildLocation." }
         foreach ($ConfirmedBuildId in $ConfirmedBuildIds) {
             if ([string]::IsNullOrWhiteSpace($ConfirmedBuildId)) { continue }
-            $ConfirmedBuildIdentities += [ordered]@{
+            $ConfirmedBuildIdentities += [pscustomobject][ordered]@{
                 build_id = [string]$ConfirmedBuildId
                 location = $BuildLocation
                 build_resource = "projects/$ProjectNumber/locations/$BuildLocation/builds/$([string]$ConfirmedBuildId)"

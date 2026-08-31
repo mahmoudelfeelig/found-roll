@@ -4,7 +4,7 @@ Target length: **3:35**. Hard stop: **3:45**. The public video must remain under
 
 Record the entire video—from the opening disclosure through the final passport—as one continuous, unedited screen capture. Keep window and tab changes visible, including the move from the app to Google Cloud Console and the architecture diagram. Do not pause, cut, splice, hide a retry, substitute fixture output, or edit a failed run into a successful one.
 
-This remains a recording plan, not evidence that a video exists. Entrant/team eligibility and the research-informed story mode are confirmed. Publication remains blocked until a dedicated active Google Cloud Free Trial project has the required APIs/IAM/quota, the live Gemini/ADK and Google Cloud receipts exist for the frozen run set, the repository/tag has verified judge access, and a public YouTube/Vimeo URL whose duration is verified below four minutes is available.
+This is the recording contract, not a substitute for a video receipt. Entrant/team eligibility and the research-informed story mode are confirmed. Publish only the release tagged `v1.0.0`, and only after the private release verifier proves the active Google Cloud Free Trial boundary, required APIs/IAM/quota, five live Gemini/ADK workflows, log privacy, anonymous judge access, and a public YouTube/Vimeo runtime below four minutes.
 
 ## Recording gate
 
@@ -72,21 +72,21 @@ Never say:
 
 ## Final evidence receipt
 
-Immediately after recording, save a text receipt alongside the frozen release containing:
+Immediately after recording, save a private text receipt alongside the frozen release. Resolve every value from the named authoritative source instead of transcribing it from memory:
 
-| Field | Value |
+| Field | Authoritative source |
 | --- | --- |
-| Submitted commit/tag | `[fill after freeze]` |
-| Repository/tag and judge access | Public MIT repository verified at `https://github.com/mahmoudelfeelig/found-roll`; **[SUBMISSION BLOCKER: fill final release tag after canonical freeze]** |
-| Fixture version | `[fill after reset tooling is frozen]` |
-| App Cloud Run revision | `[fill from recorded run]` |
-| Simulator Cloud Run revision | `[fill from recorded run]` |
-| Case ID | `[fill from recorded run]` |
-| Model name and run ID | `[fill from recorded run]` |
-| Cloud Task name | `[fill from recorded run]` |
-| Trace/correlation ID | `[fill from recorded run]` |
-| Final event hash | `[fill from recorded run]` |
-| Evaluation report digest | `[fill from final evaluation]` |
-| Public video URL and duration | `[fill after processing]` |
+| Submitted commit/tag | Public `v1.0.0` Git tag and the immutable commit it resolves to |
+| Repository/tag and judge access | Anonymous checkout of `https://github.com/mahmoudelfeelig/found-roll` at `v1.0.0` |
+| Fixture version | Frozen release record; expected release fixture is `camera-pouch-v1` |
+| App Cloud Run revision | Final canonical-run receipt and Cloud Run revision page shown in the take |
+| Simulator Cloud Run revision | Final canonical-run receipt and Cloud Run revision page shown in the take |
+| Case ID | The filmed canonical-run receipt |
+| Model name and run ID | The filmed canonical-run receipt |
+| Cloud Task name | The filmed canonical-run receipt |
+| Trace/correlation ID | The filmed run's redacted Cloud Logging view and receipt |
+| Final event hash | The filmed canonical-run and chain-audit receipts |
+| Evaluation report digest | SHA-256 of `evaluation/results.json` at `v1.0.0` |
+| Public video URL and duration | Public YouTube/Vimeo player plus its observed runtime; the runtime must be below four minutes |
 
 Do not put credentials, private answers, signed claimant links, or service secrets in this receipt.

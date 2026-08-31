@@ -122,7 +122,7 @@ Do not put a raw answer, one-time credential, bearer key, callback secret, signe
 
 ## Canonical live-only requirements
 
-The following remain unmeasured until a deployed run produces receipts:
+The following are not measured by the local suite and must instead be proven by the private release receipts before `v1.0.0` is published:
 
 - live pinned `gemini-3.5-flash` invocation through Vertex AI;
 - Google ADK tool trajectory, typed output, run ID, and trace correlation;
@@ -172,4 +172,4 @@ Not allowed from the local suite:
 - “ownership, identity, possession, or a physical handoff was proven”; or
 - “the submission is fully evaluation-green.”
 
-Even after every local gate passes, publication remains blocked on the live Gemini/ADK and Google Cloud run receipts. The research-informed story mode is confirmed; repository/tag judge access and the verified public video URL are additional submission blockers outside this evaluation protocol.
+Local gates never substitute for live Gemini/ADK and Google Cloud receipts. The public `v1.0.0` tag is issued only after five operational runs, exact revision/resource evidence, the canonical privacy export, and clean-browser access pass together. The research-informed story mode is confirmed; the privacy-reviewed public video URL and the final Devpost action remain separate entrant steps outside this evaluation protocol.

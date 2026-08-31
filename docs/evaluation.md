@@ -1,6 +1,6 @@
 # Found Roll evaluation report
 
-The current status is **local deterministic PASS; canonical Google Cloud evaluation INCOMPLETE**. The latest machine-readable receipt is `evaluation/results.json`. It records 15 passing scenarios and no failures, but it is not a Gemini-quality result, a deployed-cloud result, or evidence of a real property transfer.
+The current model-quality status is **local deterministic PASS; canonical quality evaluation INCOMPLETE**. The latest machine-readable receipt is `evaluation/results.json`. It records 15 passing scenarios and no failures, but it is not a Gemini-quality result or evidence of a real property transfer. Separately, the `v1.0.0` release gate requires five live operational Google Cloud workflows and privacy evidence; those receipts prove execution and boundaries, not accuracy.
 
 ## Executed boundary
 
@@ -57,7 +57,7 @@ The README and `docs/` receive a separate canary-only scan because technical doc
 
 Server fixture source and deterministic test/smoke inputs are deliberately allowlisted for the synthetic answer so the project remains reproducible. The allowlist does not extend to `src/`, the built client, purpose-built claimant responses, staff/publication artifacts, logs, screenshots, or receipts, and README prose must not advertise the value.
 
-The scanner is a UTF-8 text scanner. It counts unsupported binary files but does not OCR images or decode QR codes. Existing design-QA PNGs are historical layout references, not current privacy proof. Submission screenshots/video and all deployed logs, traces, and receipts still need a canonical publication review.
+The scanner is a UTF-8 text scanner. It counts unsupported binary files but does not OCR images or decode QR codes. The `v1.0.0` release therefore pairs full log/receipt scanning with hash-bound human review of the synthetic images, architecture render, historical layout reference, and masked clean-Chrome comparison. The final demo video needs its own privacy review after recording because it cannot be reviewed before it exists.
 
 ## Verification evidence
 
@@ -73,9 +73,9 @@ service\.venv\Scripts\python.exe scripts\privacy-scan.py --root README.md --root
 
 Use the generated scanner and evaluation receipts for exact test/file counts and warnings. Independently run component suites are regression evidence for the browser, authority, and simulator boundaries; their counts belong to frozen-commit verification receipts and do not change the evaluation execution boundary above.
 
-## Live-only requirements
+## Live-only release evidence
 
-No local result covers the live model, ADK, or cloud environment. The canonical report remains incomplete until it includes:
+No local result covers the live model, ADK, or cloud environment. The private `v1.0.0` release record is acceptable only after it includes:
 
 - a live, pinned `gemini-3.5-flash` Vertex AI invocation and actual Google ADK trajectory/run receipt;
 - the submitted Cloud Run app and simulator revisions;
@@ -87,6 +87,6 @@ No local result covers the live model, ADK, or cloud environment. The canonical 
 - five fresh reset-to-close canonical runs without manual datastore repair; and
 - clean-browser behavior against the submitted API revision.
 
-Targets are not results. Any missing model run, cloud receipt, privacy export, or canonical repetition remains `INCOMPLETE`, never zero and never a pass. The full protocol and allowed claim language are in `docs/evaluation-plan.md`.
+Targets are not results. Any missing model run, cloud receipt, privacy export, or canonical repetition keeps the release gate closed; it is never treated as zero or a pass. The full protocol and allowed claim language are in `docs/evaluation-plan.md`.
 
-Submission is therefore still blocked on live Gemini and Google ADK receipts, deployed Google Cloud revision/resource evidence, and the canonical privacy export. The research-informed story mode is confirmed; repository/tag judge access and the verified public video URL remain separate unresolved Devpost blockers and are not evaluation results.
+For `v1.0.0`, five private canonical receipts, deployed revision/resource evidence, full Cloud Logging windows, and the clean Chrome receipt satisfy the operational release gate while leaving the quality thresholds explicitly incomplete. The research-informed story mode and anonymous repository access are separate confirmations. Recording, privacy-reviewing, and publishing the public demo video—and the final Devpost action—remain outside this evaluation report.

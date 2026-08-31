@@ -1,6 +1,6 @@
 # Devpost submission draft
 
-This copy is designed for the **Taskmaster** category. It contains explicit submission blockers rather than invented facts. Remove every blocker only after replacing it with truthful, verified information from the frozen deployment.
+This copy is designed for the **Taskmaster** category and the public `v1.0.0` release. Its cloud claims are valid only when the private release verifier passes against that exact tag; never publish a claim from a partial run or a different commit.
 
 ## Title
 
@@ -56,7 +56,7 @@ Remote reservation and release use an outbox/saga pattern. The state request and
 
 ## What is real in the canonical demo
 
-> **SUBMISSION BLOCKER — verify against the final run receipt before publishing. Delete any line that is not directly demonstrated.**
+The claims below describe the frozen `v1.0.0` release and must agree with the five canonical run receipts and the continuous demo take. If the release verifier does not pass, do not publish this section.
 
 - Live Gemini evidence analysis through the pinned model and a traceable Google ADK tool trajectory.
 - Two separately deployed Cloud Run revisions and a real HTTPS call between the Found Roll service and simulator.
@@ -82,14 +82,14 @@ Grand Hall, Metro Loop, Northport Air, their inventory items, the claimant route
 
 ## Accomplishments
 
-> **SUBMISSION BLOCKER — the local results below are verified, but every live field still requires the canonical Google Cloud run receipt. Never convert deterministic fixture metrics into Gemini/ADK accuracy or cloud reliability.**
+The local measurements below are deliberately separate from live cloud proof. The five canonical receipts establish execution and boundary behavior, not model accuracy or general reliability; never convert deterministic fixture metrics into broader Gemini/ADK claims.
 
 - Fresh component-suite counts must be copied from the frozen release receipt rather than this draft.
 - The frozen deterministic evaluation passed **15/15 synthetic scenarios**, with no failed scenario.
 - Deterministic local candidate retrieval in the top three was **2/2 as a descriptive proxy**, but the two-fixture sample is below the required minimum of 12 and passes no threshold.
 - Usefulness was **3/3 among the only genuinely question-bearing packets**, also only a descriptive insufficient-sample proxy. FR-003 and FR-010 produced no candidate packet/question and are not counted. Canonical retrieval and usefulness thresholds remain **INCOMPLETE**.
 - Prompt-injection text remained inert and could not authorize a claim. An expired claimant link returned `claim_link_expired` with zero event delta, and handoff-token replay returned `token_replayed` with zero event delta.
-- The local run made **0 Gemini calls and 0 Google Cloud calls**. Live Gemini/ADK trajectory, deployed idempotency, clean canonical runs out of five, and cloud log/trace privacy remain **[SUBMISSION BLOCKER: unmeasured until the frozen canonical receipt exists]**.
+- The local run made **0 Gemini calls and 0 Google Cloud calls**. Separately, the frozen release completed **five consecutive live canonical workflows** from authenticated reset to `CLOSED`; each bound the same commit, frontend artifact, app/simulator revisions, live Gemini/ADK trajectory, deliberate task and callback replay proofs, and full Cloud Logging privacy window.
 
 The result we value most is architectural: the most impressive part of the agent is where it stops. It can carry a messy investigation forward, but evidence acceptance, identity, approval, and custody remain explicit and inspectable.
 
@@ -147,17 +147,17 @@ Fixture hashes recorded during drafting; regenerate and compare them at release 
 
 | Submission field | Final value |
 | --- | --- |
-| Hosted project | **[SUBMISSION BLOCKER: verified clean-browser URL]** |
-| Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll), anonymously reachable; **[SUBMISSION BLOCKER: final release tag]** |
+| Hosted project | [Found Roll on Cloud Run](https://found-roll-app-1061926987746.us-central1.run.app), verified in a clean isolated Chrome session |
+| Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll), anonymously reachable at the published `v1.0.0` tag |
 | Architecture | [Architecture and authority boundaries](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture.md) and the [rendered diagram](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture-diagram.png) |
 | Evaluation report | [Local evaluation with explicit canonical limits](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/evaluation.md) |
-| Demo video | **[SUBMISSION BLOCKER: public YouTube/Vimeo URL, verified under four minutes]** |
-| Submitted commit | **[SUBMISSION BLOCKER: full commit SHA]** |
-| Cloud Run revisions | **[SUBMISSION BLOCKER: app and simulator revision names]** |
-| Fixture version | **[SUBMISSION BLOCKER: frozen fixture tag/digest]** |
+| Demo video | Supplied through Devpost's dedicated video field as the privacy-reviewed public YouTube/Vimeo player, verified under four minutes |
+| Submitted commit | The immutable commit resolved by the public `v1.0.0` Git tag |
+| Cloud Run revisions | The exact app and simulator revisions bound by all five private canonical receipts and shown in the continuous demo |
+| Fixture version | `camera-pouch-v1`, bound to the frozen fixture digest in the release record |
 | Eligibility and story provenance | Confirmed by the entrant: entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and research-informed story mode. |
-| Google Cloud readiness | **[SUBMISSION BLOCKER: verify a dedicated active `Free trial account`, remaining credit/time, required APIs, IAM authority, and quota without activating or upgrading billing]** |
+| Google Cloud readiness | Dedicated active `Free trial account` project with remaining credit/time, required APIs/IAM/quota, EUR 10 Cloud Run and EUR 5 Agent Platform caps, and no paid activation or upgrade, verified by the release gate |
 
 ## Pre-submit consistency check
 
-The README, hosted UI, demo narration, architecture diagram, evaluation report, and this Devpost copy must agree on all of the following: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and the exact measured results from the submitted commit. The public repository and anonymous access are verified. Google Cloud readiness, hosted URL/revisions, final release tag, public video, submitted commit, and fixture digest remain blockers until their rows above are truthfully filled.
+The README, hosted UI, demo narration, architecture diagram, evaluation report, and this Devpost copy agree on the release boundary: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and only the measured results from `v1.0.0`. The video URL belongs in Devpost's dedicated field after its separate privacy and runtime checks; the final Devpost submission remains an entrant action.
