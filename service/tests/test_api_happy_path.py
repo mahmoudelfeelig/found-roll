@@ -453,7 +453,7 @@ def test_analysis_call_ceiling_enters_manual_review_and_acks_terminal_redelivery
     }
 
     def exhaust_call_budget(_context):
-        raise LlmCallsLimitExceededError("Max number of llm calls limit of `8` exceeded")
+        raise LlmCallsLimitExceededError("Max number of llm calls limit of `12` exceeded")
 
     app.state.custody_service.analyst = VertexAdkCaseAnalyst(
         project="fixture-project",

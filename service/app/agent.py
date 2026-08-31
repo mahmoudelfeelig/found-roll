@@ -28,6 +28,7 @@ from .domain import (
     CaseRecord,
     EvidenceOrigin,
     EvidenceVisibility,
+    MAX_LLM_INVOCATIONS,
 )
 from .errors import Conflict, Unavailable
 from .inventory import FixtureInventoryGateway, InventoryGateway
@@ -286,7 +287,7 @@ def _observed_execution_evidence(
 
 class VertexAdkCaseAnalyst:
     mode = "vertex_adk"
-    max_llm_calls = 8
+    max_llm_calls = MAX_LLM_INVOCATIONS
     prompt_version = CASE_ANALYST_PROMPT_VERSION
     output_schema_version = ANALYSIS_PROPOSAL_SCHEMA_VERSION
 

@@ -113,6 +113,7 @@ const allowedAgentTools = new Set([
   "request_manual_review",
 ]);
 const allowedToolOutcomes = new Set(["success", "denied", "abstained", "unavailable"]);
+const liveAgentInvocationCap = 12;
 const allowedCustodyStates = new Set([
   "RECEIVED",
   "EVIDENCE_READY",
@@ -1618,7 +1619,7 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
   const terminalTask = evaluationById.get("FR-015")?.observed;
   if (
     !evaluationRowsValid
-    || boundedAgent?.max_llm_calls_cap !== 8
+    || boundedAgent?.max_llm_calls_cap !== liveAgentInvocationCap
     || boundedAgent?.max_output_tokens_cap !== 2048
     || boundedAgent?.live_trajectory_observed !== false
     || terminalTask?.final_state !== "RECONCILIATION_REQUIRED"
@@ -3208,8 +3209,8 @@ function validateRunReceipt(receipt, binding, releaseRecord, preparationReceipt,
   if (checkObject(receipt.live_agent, `${base}.live_agent`, ["model_run_id", "trace_id", "invocation_count", "tool_trajectory", "typed_output_valid"], failures)) {
     requireReceiptIdentifier(receipt.live_agent, "model_run_id", `${base}.live_agent`, failures);
     requireReceiptIdentifier(receipt.live_agent, "trace_id", `${base}.live_agent`, failures);
-    if (!Number.isInteger(receipt.live_agent.invocation_count) || receipt.live_agent.invocation_count < 1 || receipt.live_agent.invocation_count > 8) {
-      addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.invocation_count must be between 1 and the frozen cap of 8.`);
+    if (!Number.isInteger(receipt.live_agent.invocation_count) || receipt.live_agent.invocation_count < 1 || receipt.live_agent.invocation_count > liveAgentInvocationCap) {
+      addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.invocation_count must be between 1 and the frozen cap of ${liveAgentInvocationCap}.`);
     }
     requireTrue(receipt.live_agent.typed_output_valid, `${base}.live_agent.typed_output_valid`, failures);
     if (!Array.isArray(receipt.live_agent.tool_trajectory) || receipt.live_agent.tool_trajectory.length < 4 || receipt.live_agent.tool_trajectory.length > 12) {

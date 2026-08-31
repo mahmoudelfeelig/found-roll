@@ -23,7 +23,9 @@ from app.agent import (
 from app.agent_contract import CASE_ANALYST_INSTRUCTION, CASE_ANALYST_PROMPT_VERSION
 from app.domain import (
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
+    AgentExecutionEvidence,
     AnalysisProposal,
+    CaseRecord,
     EvidenceOrigin,
     EvidenceProvenance,
     EvidenceRecord,
@@ -53,7 +55,7 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     assert agent.output_schema is AnalysisProposal
     assert agent.instruction == CASE_ANALYST_INSTRUCTION
     assert len(agent.tools) == 5
-    assert analyst.max_llm_calls == 8
+    assert analyst.max_llm_calls == 12
     assert analyst.prompt_version == CASE_ANALYST_PROMPT_VERSION
     assert analyst.output_schema_version == ANALYSIS_PROPOSAL_SCHEMA_VERSION
     tools = {tool.__name__: tool for tool in agent.tools}
@@ -117,6 +119,30 @@ def test_analysis_schema_is_vertex_compatible_and_keeps_claim_authority_fail_clo
                 **proposal,
                 evidence_sufficient_for_claim=non_boolean_false,
             )
+
+
+def test_live_invocation_evidence_accepts_the_frozen_cap_and_rejects_overflow():
+    execution = AgentExecutionEvidence(
+        trace_id="bounded-trace",
+        invocation_count=12,
+        tool_trajectory=[{"name": "search_custodian", "outcome": "success"}],
+        typed_output_valid=True,
+    )
+    assert execution.invocation_count == 12
+    with pytest.raises(ValueError):
+        AgentExecutionEvidence(
+            trace_id="overflow-trace",
+            invocation_count=13,
+            tool_trajectory=[{"name": "search_custodian", "outcome": "success"}],
+            typed_output_valid=True,
+        )
+
+    case_payload = fixture_case().model_dump()
+    case_payload["model_invocation_count"] = 12
+    assert CaseRecord.model_validate(case_payload).model_invocation_count == 12
+    case_payload["model_invocation_count"] = 13
+    with pytest.raises(ValueError):
+        CaseRecord.model_validate(case_payload)
 
 
 def test_adk_events_become_sanitized_bound_execution_evidence():
@@ -239,7 +265,7 @@ def test_adk_execution_evidence_rejects_unpaired_tool_response():
 
 def test_adk_llm_call_ceiling_is_translated_to_terminal_unavailability(monkeypatch):
     def exhaust_call_budget(_context):
-        raise LlmCallsLimitExceededError("Max number of llm calls limit of `8` exceeded")
+        raise LlmCallsLimitExceededError("Max number of llm calls limit of `12` exceeded")
 
     # Keep the real Runner path so root-agent mode validation executes. The
     # patched call counter stops immediately before any model request.

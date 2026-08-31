@@ -531,7 +531,7 @@ async function createFixture(t) {
       execution_mode: "local_deterministic_fixture",
       passed: true,
       observed: fixture.id === "FR-008"
-        ? { local_adk_construction_contract: { max_llm_calls_cap: 8, max_output_tokens_cap: 2048, live_trajectory_observed: false } }
+        ? { local_adk_construction_contract: { max_llm_calls_cap: 12, max_output_tokens_cap: 2048, live_trajectory_observed: false } }
         : fixture.id === "FR-015"
           ? { final_state: "RECONCILIATION_REQUIRED", outbox_status: "FAILED", relay_calls: 1, retry_event_delta: 0, terminal_ack_status: 200, terminal_failure_acknowledged: true, retryable: false, manual_action_required: true }
           : {},
@@ -2030,6 +2030,23 @@ test("five canonical runs require unique preparations, fixed revisions, and a fi
   assert.equal(codes.has("CANONICAL_RUN_UNIQUENESS"), true);
   assert.equal(codes.has("CANONICAL_REVISION_DRIFT"), true);
   assert.equal(codes.has("VIDEO_RUN_BINDING"), true);
+});
+
+test("live trajectory accepts the frozen twelve-call boundary and rejects overflow", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.runReceipts[0].live_agent.invocation_count = 12;
+  let rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
+  fixture.record.receipts.canonical_runs[0].run_sha256 = rewrittenRun.digest;
+
+  let result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, true, formatReadinessResult(result));
+
+  fixture.runReceipts[0].live_agent.invocation_count = 13;
+  rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
+  fixture.record.receipts.canonical_runs[0].run_sha256 = rewrittenRun.digest;
+  result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("LIVE_AGENT_TRAJECTORY"), true);
 });
 
 test("cloud, trajectory, closure, and privacy proof cannot be reduced to a pass label", async (t) => {

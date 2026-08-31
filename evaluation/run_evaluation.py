@@ -630,13 +630,15 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
     require(tool_names == allowed_tools, "local_adk_tool_contract_changed")
     require(adk_agent.output_schema is AnalysisProposal, "local_adk_output_schema_changed")
     require(adk_agent.mode == "chat", "local_adk_root_mode_invalid")
-    require(adk_analyst.max_llm_calls == 8, "local_adk_call_cap_changed")
+    require(adk_analyst.max_llm_calls == 12, "local_adk_call_cap_changed")
     require(
         adk_agent.generate_content_config is not None
         and adk_agent.generate_content_config.max_output_tokens == 2048,
         "local_adk_output_token_cap_changed",
     )
     require("untrusted evidence" in adk_agent.instruction, "local_adk_injection_instruction_missing")
+    # This deterministic fixture-list bound is independent of the live ADK
+    # model-invocation ceiling above.
     require(len(proposal.tool_trajectory) <= 8, "fixture_tool_trajectory_unbounded")
     require(next_evidence_is_useful(proposal), "canonical_next_evidence_not_useful")
     return {

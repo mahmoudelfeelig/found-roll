@@ -9,6 +9,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+MAX_LLM_INVOCATIONS = 12
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -164,7 +167,7 @@ class AgentExecutionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trace_id: str = Field(min_length=1, max_length=200)
-    invocation_count: int = Field(ge=1, le=8)
+    invocation_count: int = Field(ge=1, le=MAX_LLM_INVOCATIONS)
     tool_trajectory: list[AgentToolOutcome] = Field(min_length=1, max_length=12)
     typed_output_valid: bool
 
@@ -220,7 +223,7 @@ class CaseRecord(BaseModel):
     model_trace_id: str | None = None
     model_name: str | None = None
     model_mode: str | None = None
-    model_invocation_count: int | None = Field(default=None, ge=0, le=8)
+    model_invocation_count: int | None = Field(default=None, ge=0, le=MAX_LLM_INVOCATIONS)
     model_tool_trajectory: list[AgentToolOutcome] = Field(default_factory=list, max_length=12)
     model_typed_output_valid: bool = False
     last_event_hash: str = "0" * 64

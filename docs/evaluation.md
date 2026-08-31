@@ -27,7 +27,7 @@ The scenarios are synthetic and implementation-shaped. Passing all 15 means the 
 | FR-005 | Sensitive property returned `DENY` with the specialist-policy reason | PASS |
 | FR-006 | Dangerous pre-intake was not accepted and created no record or model work; case-count delta was zero | PASS |
 | FR-007 | Each wrong answer consumed and rotated the case/version-scoped claimant link; the fourth reached `MANUAL_REVIEW`; serialized staff event output had no restricted answer/digest fields | PASS |
-| FR-008 | Deterministic analyst selected the canonical fixture candidate, abstained from claim acceptance, emitted a non-leading question, and preserved the eight-call plus 2,048-output-token ADK caps | PASS |
+| FR-008 | Deterministic analyst selected the canonical fixture candidate, abstained from claim acceptance, emitted a non-leading question, and preserved the twelve-call plus 2,048-output-token ADK caps | PASS |
 | FR-009 | Route-incompatible top candidate was excluded; the eligible runner-up was selected; analyst still abstained | PASS |
 | FR-010 | With no eligible candidate, the analyst returned `no_eligible_candidates` and invented none | PASS |
 | FR-011 | Stale expected version returned HTTP 409 `stale_case_version` with zero event delta | PASS |
