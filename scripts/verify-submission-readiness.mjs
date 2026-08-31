@@ -34,6 +34,8 @@ const projectIdPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const projectNumberPattern = /^\d{6,20}$/;
 const bucketNamePattern = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
+const isoUtcTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/i;
+const isoUtcInstantPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$/i;
 const weakSimulatorEtagPattern = /^W\/"sim-[a-z0-9][a-z0-9-]{2,180}-v[1-9]\d*"$/;
 const expectedGoogleCloudResourceIdentity = Object.freeze({
   schema_version: "1",
@@ -112,7 +114,14 @@ const allowedAgentTools = new Set([
   "request_manual_review",
 ]);
 const allowedToolOutcomes = new Set(["success", "denied", "abstained", "unavailable"]);
-const liveAgentInvocationCap = 12;
+const liveAgentInvocationCap = 6;
+const expectedLiveAgentTrajectory = [
+  { name: "search_custodian", outcome: "success" },
+  { name: "search_custodian", outcome: "success" },
+  { name: "load_candidate", outcome: "success" },
+  { name: "submit_observations", outcome: "success" },
+  { name: "propose_discriminator", outcome: "success" },
+];
 const allowedCustodyStates = new Set([
   "RECEIVED",
   "EVIDENCE_READY",
@@ -157,8 +166,8 @@ const expectedFrozenDemoTrajectory = [
   ["ITEM_PASSPORT_CLOSED", "RELEASED", "CLOSED"],
 ];
 const expectedContractVersions = {
-  prompt: "found-roll-case-analyst-prompt-v2",
-  output_schema: "found-roll-analysis-proposal-v1",
+  prompt: "found-roll-case-analyst-prompt-v3",
+  output_schema: "found-roll-analysis-proposal-v2",
   policy: "found-roll-release-v1",
 };
 const canonicalPrivacyScannerTargets = Object.freeze([
@@ -229,7 +238,7 @@ function requireNonNegativeInteger(value, fieldPath, failures) {
 }
 
 function requireUtcTimestamp(value, fieldPath, failures) {
-  if (typeof value !== "string" || !/Z$/i.test(value) || Number.isNaN(Date.parse(value))) {
+  if (typeof value !== "string" || !isoUtcTimestampPattern.test(value) || Number.isNaN(Date.parse(value))) {
     addFailure(failures, "UTC_TIMESTAMP_REQUIRED", `${fieldPath} must be an ISO-8601 UTC timestamp ending in Z.`);
     return false;
   }
@@ -237,7 +246,7 @@ function requireUtcTimestamp(value, fieldPath, failures) {
 }
 
 function requireUtcInstant(value, fieldPath, failures) {
-  if (typeof value !== "string" || !/(?:Z|\+00:00)$/i.test(value) || Number.isNaN(Date.parse(value))) {
+  if (typeof value !== "string" || !isoUtcInstantPattern.test(value) || Number.isNaN(Date.parse(value))) {
     addFailure(failures, "UTC_TIMESTAMP_REQUIRED", `${fieldPath} must be an ISO-8601 UTC timestamp.`);
     return false;
   }
@@ -1162,8 +1171,12 @@ function validateDocumentationEvidence(rawByPath, failures) {
   const secretUploadStateCheckCount = (deployment.match(/^[ \t]*Assert-SecretUploadState[ \t]*$/gm) || []).length;
   const analysisLeaseMatch = deployment.match(/ANALYSIS_EXECUTION_LEASE_SECONDS\s*=\s*(\d+)/);
   const queueMinimumBackoffMatch = deployment.match(/--min-backoff=(\d+)s/);
+  const analystWallClockMatch = deployment.match(/FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS\s*=\s*(\d+)/);
+  const taskDispatchDeadlineMatch = deployment.match(/FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS\s*=\s*(\d+)/);
   const analysisLeaseSeconds = analysisLeaseMatch ? Number.parseInt(analysisLeaseMatch[1], 10) : null;
   const queueMinimumBackoffSeconds = queueMinimumBackoffMatch ? Number.parseInt(queueMinimumBackoffMatch[1], 10) : null;
+  const analystWallClockSeconds = analystWallClockMatch ? Number.parseInt(analystWallClockMatch[1], 10) : null;
+  const taskDispatchDeadlineSeconds = taskDispatchDeadlineMatch ? Number.parseInt(taskDispatchDeadlineMatch[1], 10) : null;
   const projectDescribeIndex = deployment.indexOf("$ProjectState = gcloud projects describe $ProjectId");
   const resourceManagerEnableIndex = deployment.indexOf(
     "gcloud services enable cloudresourcemanager.googleapis.com --project=$ProjectId",
@@ -1333,13 +1346,17 @@ function validateDocumentationEvidence(rawByPath, failures) {
     || !/--scaling=auto/i.test(deployment)
     || !/--max=1/i.test(deployment)
     || !/--max-instances=1/i.test(deployment)
-    || !/--timeout=120s/i.test(deployment)
+    || !/--timeout=300s/i.test(deployment)
     || !/--timeout=20s/i.test(deployment)
     || !/--max-attempts=3/i.test(deployment)
     || !/--max-retry-duration=1s/i.test(deployment)
     || !Number.isInteger(analysisLeaseSeconds)
     || !Number.isInteger(queueMinimumBackoffSeconds)
     || analysisLeaseSeconds >= queueMinimumBackoffSeconds
+    || analystWallClockSeconds !== 240
+    || taskDispatchDeadlineSeconds !== 305
+    || analystWallClockSeconds >= 300
+    || taskDispatchDeadlineSeconds <= 300
     || !/gcloud\s+secrets\s+versions\s+destroy/i.test(deployment)
     || !/gcloud\s+artifacts\s+docker\s+images\s+delete/i.test(deployment)
     || !/--soft-delete-duration=0/i.test(deployment)
@@ -1572,13 +1589,13 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
     }
   }
 
-  const expectedLocalIds = Array.from({ length: 15 }, (_, index) => `FR-${String(index + 1).padStart(3, "0")}`);
+  const expectedLocalIds = Array.from({ length: 16 }, (_, index) => `FR-${String(index + 1).padStart(3, "0")}`);
   const fixtureManifest = parsedJson("evaluation/fixtures.json");
   const fixtureRunnerById = new Map();
   let fixtureManifestValid = fixtureManifest?.schema_version === "2.0"
     && fixtureManifest?.suite_id === "found-roll-local-safety-v2"
     && Array.isArray(fixtureManifest?.fixtures)
-    && fixtureManifest.fixtures.length === 15;
+    && fixtureManifest.fixtures.length === 16;
   if (fixtureManifestValid) {
     for (const fixture of fixtureManifest.fixtures) {
       if (!expectedLocalIds.includes(fixture?.id) || fixtureRunnerById.has(fixture.id) || typeof fixture.runner !== "string" || fixture.runner.length < 3) {
@@ -1590,20 +1607,20 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
     fixtureManifestValid = fixtureManifestValid && expectedLocalIds.every((id) => fixtureRunnerById.has(id));
   }
   if (fixtureManifest && !fixtureManifestValid) {
-    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/fixtures.json must define exactly one runner for every FR-001 through FR-015 fixture.");
+    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/fixtures.json must define exactly one runner for every FR-001 through FR-016 fixture.");
   }
 
   const evaluation = parsedJson("evaluation/results.json");
   let evaluationRowsValid = evaluation?.schema_version === "2.0"
     && evaluation?.suite_id === "found-roll-local-safety-v2"
     && evaluation?.status === "LOCAL_PASS_CANONICAL_INCOMPLETE"
-    && evaluation?.fixture_count === 15
-    && evaluation?.passed_count === 15
+    && evaluation?.fixture_count === 16
+    && evaluation?.passed_count === 16
     && evaluation?.failed_count === 0
     && evaluation?.execution_boundary?.gemini_calls === 0
     && evaluation?.execution_boundary?.google_cloud_calls === 0
     && Array.isArray(evaluation?.results)
-    && evaluation.results.length === 15;
+    && evaluation.results.length === 16;
   const evaluationById = new Map();
   if (evaluationRowsValid) {
     for (const result of evaluation.results) {
@@ -1623,6 +1640,7 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
   }
   const boundedAgent = evaluationById.get("FR-008")?.observed?.local_adk_construction_contract;
   const terminalTask = evaluationById.get("FR-015")?.observed;
+  const abstentionBranch = evaluationById.get("FR-016")?.observed;
   if (
     !evaluationRowsValid
     || boundedAgent?.max_llm_calls_cap !== liveAgentInvocationCap
@@ -1636,8 +1654,19 @@ async function validateFrozenFiles(repoRoot, bindings, failures) {
     || terminalTask?.manual_action_required !== true
     || terminalTask?.relay_calls !== 1
     || terminalTask?.retry_event_delta !== 0
+    || abstentionBranch?.evaluation_mode !== "deterministic_branch_mechanics_no_model_no_adk_run"
+    || abstentionBranch?.schema?.valid_abstention_path !== true
+    || abstentionBranch?.schema?.mixed_paths_rejected !== 5
+    || abstentionBranch?.trajectory?.live_adk_trajectory_observed !== false
+    || abstentionBranch?.trajectory?.mismatched_reason_rejected !== true
+    || abstentionBranch?.workflow?.final_state !== "MANUAL_REVIEW"
+    || abstentionBranch?.workflow?.outbox_completed !== true
+    || abstentionBranch?.workflow?.candidate_packet_persisted !== false
+    || abstentionBranch?.workflow?.private_question_persisted !== false
+    || abstentionBranch?.workflow?.analyst_calls !== 1
+    || abstentionBranch?.workflow?.replay_event_delta !== 0
   ) {
-    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/results.json must contain one passing row for every frozen fixture and preserve the bounded-agent and terminal-task safety evidence.");
+    addFailure(failures, "LOCAL_EVALUATION_INCOMPLETE", "evaluation/results.json must contain one passing row for every frozen fixture and preserve the bounded-agent, abstention-branch, and terminal-task safety evidence.");
   }
 
   const privacyCanaryRecord = parsedJson("evaluation/privacy-canaries.json");
@@ -3030,7 +3059,7 @@ function validatePreparationReceipt(receipt, failures) {
   for (const key of ["case_id", "workflow_epoch", "fixture_version", "staff_actor_id", "supervisor_actor_id", "prompt_version", "output_schema_version", "policy_version"]) {
     requireReceiptIdentifier(receipt, key, base, failures);
   }
-  requireUtcInstant(receipt.prepared_at, `${base}.prepared_at`, failures);
+  requireUtcTimestamp(receipt.prepared_at, `${base}.prepared_at`, failures);
   if (!Number.isInteger(receipt.case_version) || receipt.case_version < 1) {
     addFailure(failures, "CANONICAL_PREPARATION", `${base}.case_version must be a positive integer.`);
   }
@@ -3219,24 +3248,20 @@ function validateRunReceipt(receipt, binding, releaseRecord, preparationReceipt,
       addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.invocation_count must be between 1 and the frozen cap of ${liveAgentInvocationCap}.`);
     }
     requireTrue(receipt.live_agent.typed_output_valid, `${base}.live_agent.typed_output_valid`, failures);
-    if (!Array.isArray(receipt.live_agent.tool_trajectory) || receipt.live_agent.tool_trajectory.length < 4 || receipt.live_agent.tool_trajectory.length > 12) {
-      addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.tool_trajectory must contain 4 through 12 bounded tool outcomes.`);
+    if (!Array.isArray(receipt.live_agent.tool_trajectory) || receipt.live_agent.tool_trajectory.length !== expectedLiveAgentTrajectory.length) {
+      addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.tool_trajectory must contain the exact five-step bounded trajectory.`);
     } else {
-      const observedTools = new Set();
-      const successfulTools = new Set();
       receipt.live_agent.tool_trajectory.forEach((entry, index) => {
         const fieldPath = `${base}.live_agent.tool_trajectory[${index}]`;
         if (checkObject(entry, fieldPath, ["name", "outcome"], failures)) {
           if (!allowedAgentTools.has(entry.name)) addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${fieldPath}.name is outside the bounded tool set.`);
           if (!allowedToolOutcomes.has(entry.outcome)) addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${fieldPath}.outcome is not a supported sanitized outcome.`);
-          observedTools.add(entry.name);
-          if (entry.outcome === "success") successfulTools.add(entry.name);
+          const expected = expectedLiveAgentTrajectory[index];
+          if (entry.name !== expected.name || entry.outcome !== expected.outcome) {
+            addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${fieldPath} must match the frozen successful tool protocol.`);
+          }
         }
       });
-      for (const requiredTool of ["search_custodian", "load_candidate", "submit_observations", "propose_discriminator"]) {
-        if (!observedTools.has(requiredTool)) addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.tool_trajectory is missing a required bounded tool.`);
-        else if (!successfulTools.has(requiredTool)) addFailure(failures, "LIVE_AGENT_TRAJECTORY", `${base}.live_agent.tool_trajectory must record a successful sanitized outcome for every required tool.`);
-      }
     }
   }
 

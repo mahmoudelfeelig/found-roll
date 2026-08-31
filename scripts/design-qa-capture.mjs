@@ -1,12 +1,15 @@
 import { mkdir } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright-core";
+import { createServer as createViteServer } from "vite";
 
 const root = path.resolve(import.meta.dirname, "..");
 const outputDir = path.join(root, "artifacts", "design-qa");
 const liveMode = Boolean(process.env.FOUND_ROLL_URL);
-const baseUrl = process.env.FOUND_ROLL_URL || process.env.FOUND_ROLL_QA_BASE_URL || "http://127.0.0.1:5173";
+const configuredQaBaseUrl = process.env.FOUND_ROLL_QA_BASE_URL;
+let baseUrl = process.env.FOUND_ROLL_URL || configuredQaBaseUrl || "";
 const executablePath = process.env.CHROME_PATH || "C:/Program Files/Google/Chrome/Application/chrome.exe";
 
 const walkthroughFixture = {
@@ -67,9 +70,59 @@ const healthFixture = {
 
 await mkdir(outputDir, { recursive: true });
 
+async function findAvailableLoopbackPort() {
+  const probe = createNetServer();
+  await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const address = probe.address();
+  await new Promise((resolve, reject) => {
+    probe.close((error) => (error ? reject(error) : resolve()));
+  });
+  if (!address || typeof address === "string") {
+    throw new Error("Found Roll QA could not reserve a loopback port.");
+  }
+  return address.port;
+}
+
+async function startOwnedLocalServer() {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const port = await findAvailableLoopbackPort();
+    const server = await createViteServer({
+      root,
+      logLevel: "error",
+      server: { host: "127.0.0.1", port, strictPort: true },
+    });
+    try {
+      await server.listen();
+      return server;
+    } catch (error) {
+      lastError = error;
+      await server.close();
+    }
+  }
+  throw new Error(`Found Roll QA could not start an isolated local Vite server: ${lastError?.message || "unknown error"}`);
+}
+
+// Local QA must never attach to whichever unrelated Vite server happens to own
+// a common development port. An explicit QA URL remains useful for focused
+// environments, while the default run owns an ephemeral Found Roll server.
+let localServer = null;
+if (!baseUrl) {
+  localServer = await startOwnedLocalServer();
+  const address = localServer.httpServer?.address();
+  if (!address || typeof address === "string") {
+    await localServer.close();
+    throw new Error("Found Roll QA could not determine its local Vite address.");
+  }
+  baseUrl = `http://127.0.0.1:${address.port}`;
+}
+
 const browser = await chromium.launch({ executablePath, headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
-const report = { baseUrl, liveMode, screenshots: [], assertions: [], viewportChecks: [], apiRequests: [] };
+const report = { baseUrl, liveMode, ownedLocalServer: Boolean(localServer), screenshots: [], assertions: [], viewportChecks: [], apiRequests: [] };
 
 function recordAssertion(label, passed, details = undefined) {
   report.assertions.push({ label, passed, ...(details === undefined ? {} : { details }) });
@@ -85,6 +138,15 @@ async function go(pathname = "/") {
   await page.goto(new URL(pathname, `${baseUrl}/`).toString(), { waitUntil: "networkidle" });
 }
 
+async function confirmImagesLoaded(label) {
+  const loaded = await page.waitForFunction(
+    () => [...document.images].every((image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0),
+    undefined,
+    { timeout: 10_000 },
+  ).then(() => true).catch(() => false);
+  recordAssertion(`${label}: images loaded`, loaded);
+}
+
 async function assertNoHorizontalOverflow(label) {
   const overflow = await page.evaluate(() => (
     Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) > window.innerWidth + 1
@@ -96,6 +158,7 @@ async function inspectJudgeViewport(width, height, name) {
   await page.setViewportSize({ width, height });
   await go("/?view=walkthrough");
   await page.getByRole("heading", { name: "Inspect the redacted completed case" }).waitFor();
+  await confirmImagesLoaded(`judge ${width}x${height}`);
   await page.getByRole("button", { name: /Refresh live record/ }).waitFor();
   await assertNoHorizontalOverflow(`judge ${width}x${height}`);
   const criticalBounds = await page.evaluate(() => {
@@ -131,6 +194,7 @@ if (!liveMode) {
 try {
   await go("/");
   await page.getByRole("heading", { name: "Inspect the redacted completed case" }).waitFor();
+  await confirmImagesLoaded("public root");
   recordAssertion("public root identifies the Judge Walkthrough", await page.getByText("PUBLIC · READ-ONLY", { exact: true }).isVisible());
   recordAssertion("public root has a working read-only refresh", await page.getByRole("button", { name: "Refresh live record" }).isEnabled());
   recordAssertion("public root has no password controls", await page.locator('input[type="password"]').count() === 0);
@@ -175,6 +239,7 @@ try {
   recordAssertion("narrow staff workspace discloses workstation requirement", await page.getByText(/optimized for a 1120px\+ workstation/i).isVisible());
 } finally {
   await browser.close();
+  await localServer?.close();
 }
 
 const failures = report.assertions.filter((item) => !item.passed);

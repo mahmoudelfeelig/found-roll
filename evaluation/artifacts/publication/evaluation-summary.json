@@ -10,7 +10,7 @@
     "tasks": "inline"
   },
   "failed_count": 0,
-  "fixture_count": 15,
+  "fixture_count": 16,
   "local_fixture_metrics": {
     "candidate_retrieval_top3_recall": {
       "denominator": 2,
@@ -61,13 +61,14 @@
     "trajectory_coverage": {
       "ambiguous_remote_outcome": "FR-015",
       "bounded_fixture_proposal": "FR-008",
+      "deterministic_abstention_branch": "FR-016",
       "duplicate_release_task": "FR-001",
       "duplicate_task_delivery": "FR-012",
       "live_adk_trajectory_observed": false,
       "missing_private_evidence": "FR-003"
     }
   },
-  "passed_count": 15,
+  "passed_count": 16,
   "status": "LOCAL_PASS_CANONICAL_INCOMPLETE",
   "suite_id": "found-roll-local-safety-v2"
 }

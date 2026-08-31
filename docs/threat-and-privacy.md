@@ -53,6 +53,8 @@ Original and derived images are different objects. The derived path strips EXIF 
 
 Production rich reads for cases, candidates, events, and manifests require staff authentication. Claimants receive a separate, purpose-built projection containing only the fields needed to answer the active proof question. The hosted root uses a third purpose-built response: the no-store, non-mutating Judge Walkthrough for the fixed closed synthetic case. It accepts no credentials and omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs. Staff/publication and claimant contracts use explicit response models. Pydantic field exclusion is helpful but is not the sole control: privacy tests search serialized rich-read, publication, validation-error, and claimant responses for restricted field names and canaries.
 
+No public proof-of-action receipt is implemented or published. If one is proposed after the private release evidence exists, it becomes a new public data surface requiring explicit authorization, a separate threat/privacy review, and publication-specific scanning before it is created, exposed, or described as evidence. It would not replace the private five-run receipts, an independently anchored ledger, or proof of model quality, candidate correctness, claim sufficiency, ownership, identity, possession, or physical handoff.
+
 Sensitive intake routing happens before upload or network work. The category selects a deterministic action/retention rule for passports or government IDs, payment cards, access badges, medication, suspicious packages, or an unknown specialist category; the selected tenant resolves that rule to the Northport Air, Metro Loop, or Grand Hall specialist desk. Every such branch sets upload/model permission false, exposes no file input, creates no case, and calls no model.
 
 ## Model and prompt-injection boundary
@@ -67,9 +69,9 @@ The Case Analyst receives only proposal tools:
 - propose a restricted attribute ID and one non-leading question; and
 - request manual review with a bounded reason code.
 
-It has no tool for evidence acceptance, identity, approval, reservation, credential issuance, release, closure, tenant administration, IAM, or arbitrary URL fetching. Tool schemas reject extra fields, calls are capped, tenant authorization is checked outside the model, and returned text cannot add permissions. The model does not receive the expected private answer. Any schema failure, prompt-injection signal, unavailable source, or missing private discriminator abstains or enters manual review.
+It has no tool for evidence acceptance, identity, approval, reservation, credential issuance, release, closure, tenant administration, IAM, or arbitrary URL fetching. Tool schemas reject extra fields, calls are capped, tenant authorization is checked outside the model, and returned text cannot add permissions. Deterministic code fixes the candidate ordering and allowed private discriminator; the model does not receive the expected answer and cannot decide candidate correctness or claim sufficiency. Any schema failure, prompt-injection signal, unavailable source, or missing private discriminator abstains or enters manual review.
 
-Model confidence may prioritize the investigation queue but cannot satisfy a policy gate. The current service records the model name, model run ID, the single observed ADK invocation ID, a logical ADK model-call count, sanitized tool-name/outcome pairs, and event evidence references without logging raw private prompts or responses. The logical count is derived from unique non-streaming ADK events carrying usage metadata and does not claim to count internal SDK HTTP retries. Tool evidence fails closed unless every response ID and name matches exactly one observed call; arguments, response bodies, token usage, prompts, and model response text are discarded before persistence. Runtime health and snapshots expose only non-secret contract identifiers: `found-roll-case-analyst-prompt-v2`, `found-roll-analysis-proposal-v1`, and `found-roll-release-v1`. Request-completion logs may include only an allowlisted stable analyst failure code; exception messages, model content, tool arguments, and unrecognized codes remain excluded. Durable outbox records retain only the coarse unavailable or policy-conflict class. Every `v1.0.0` canonical receipt binds those identifiers to the submitted SHA-256 values of `service/app/agent_contract.py`, `service/app/domain.py`, and `service/app/policy.py`, plus the observed sanitized ADK trajectory/source references.
+Any model confidence is non-authoritative and cannot satisfy a policy gate or select a custody outcome. The current service records the model name, model run ID, the single observed ADK invocation ID, a logical ADK model-call count, sanitized tool-name/outcome pairs, and event evidence references without logging raw private prompts or responses. The logical count is derived from unique non-streaming ADK events carrying usage metadata and does not claim to count internal SDK HTTP retries. Tool evidence fails closed unless every response ID and name matches exactly one observed call; arguments, response bodies, token usage, prompts, and model response text are discarded before persistence. Runtime health and snapshots expose only non-secret contract identifiers: `found-roll-case-analyst-prompt-v3`, `found-roll-analysis-proposal-v2`, and `found-roll-release-v1`. Request-completion logs may include only an allowlisted stable analyst failure code; exception messages, model content, tool arguments, and unrecognized codes remain excluded. Durable outbox records retain only the coarse unavailable or policy-conflict class. Every `v1.0.0` canonical receipt binds those identifiers to the submitted SHA-256 values of `service/app/agent_contract.py`, `service/app/domain.py`, and `service/app/policy.py`, plus the observed sanitized ADK trajectory/source references.
 
 ## Custody and concurrency controls
 
@@ -156,7 +158,7 @@ Validation errors report field paths and generic schema messages only. They neve
 
 ## Privacy and log scan
 
-Every canonical run exports the exact app/simulator log and trace time range into a release-only artifact, then scans it together with purpose-built claimant responses, staff/publication surfaces, task receipts, screenshots, and repository publication artifacts.
+Every canonical run exports the exact app/simulator log and trace time range into a release-only artifact, then scans it together with purpose-built claimant responses, staff/publication surfaces, task receipts, screenshots, and repository publication artifacts. Any separately authorized future proof-of-action artifact must receive its own publication scan before exposure.
 
 The scanner input manifest contains synthetic canaries and forbidden patterns. Store that manifest outside claimant/publication assets and identify it in reports by SHA-256, not by printing its values. Required pattern classes include:
 
@@ -166,7 +168,7 @@ The scanner input manifest contains synthetic canaries and forbidden patterns. S
 - private bucket/object paths and signed URL shapes;
 - long unexpected URL-safe strings in errors or logs;
 - ID-document field labels, exact addresses, EXIF GPS labels, and raw claimant text; and
-- restricted Pydantic/domain field names on claimant or staff/publication surfaces.
+- restricted Pydantic/domain field names on claimant or staff/publication surfaces, plus any separately authorized future proof-of-action artifact.
 
 The scan receipt must state the submitted commit, both Cloud Run revisions, case IDs, UTC start/end, log filter, trace export range, manifest digest, files examined, match count, manually reviewed false positives, and final finding count. The release gate is zero unresolved findings. A scanner that did not cover Cloud logs/traces and rendered artifacts is incomplete.
 
@@ -262,6 +264,7 @@ Preserve the failed-run receipt. Rotate affected secrets through Secret Manager,
 - [ ] The canonical inventory health receipt records production mode and legacy health compatibility disabled.
 - [ ] Five fresh canonical runs pass without manual database repair.
 - [ ] Log/trace/public/artifact scan has zero unresolved findings.
+- [ ] Any future proof-of-action artifact has explicit authorization, a separate threat/privacy review, and publication-specific scan evidence; it remains distinct from the private five-run release evidence.
 - [ ] Devpost, README, UI, architecture, demo, and manifest repeat the real-versus-simulated limitation exactly.
 
 This is a reusable pre-publication checklist, not a live status board. The `v1.0.0` private release record binds its completed checks to the exact commit, five live Gemini/ADK/Google Cloud runs, clean Chrome observation, and privacy artifacts; a future release must repeat the checklist rather than inheriting that result.

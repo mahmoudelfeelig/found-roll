@@ -7,10 +7,12 @@ import secrets
 from typing import Callable
 from uuid import NAMESPACE_URL, uuid5
 
-from .agent import CaseAnalyst
+from .agent import CaseAnalyst, deterministic_candidate_packet
 from .config import Settings
 from .correlation import get_or_create_correlation_id
 from .domain import (
+    ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+    ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
     AppliedMutation,
     Candidate,
     CaseRecord,
@@ -737,7 +739,9 @@ class CustodyService:
                 )
             if claim.disposition == ExecutionClaimDisposition.STALE_RECOVERY:
                 case = self.repository.get_case(outbox.case_id)
-                recovered = self._recover_analysis_failure(case, outbox, claim_token)
+                recovered = self._recover_analysis_abstention(case, outbox, claim_token)
+                if recovered is None:
+                    recovered = self._recover_analysis_failure(case, outbox, claim_token)
                 if recovered is not None:
                     return recovered
                 if case.state == CustodyState.ANALYZING:
@@ -810,6 +814,46 @@ class CustodyService:
             "manual_action_required": True,
         }
 
+    def _recover_analysis_abstention(
+        self,
+        case: CaseRecord,
+        outbox,
+        claim_token: str,
+    ) -> dict | None:
+        """Finish an already-committed agent abstention without another model call."""
+
+        if case.state != CustodyState.MANUAL_REVIEW:
+            return None
+        recovery_key = f"outbox:{outbox.id}:agent-abstained"
+        abstention_event = next(
+            (
+                event
+                for event in reversed(self.repository.list_events(case.id))
+                if event.idempotency_key == recovery_key
+                and event.task_id == outbox.task_name
+                and event.type == "ANALYST_ABSTAINED"
+                and event.actor == "agent:case-analyst"
+                and event.from_state == CustodyState.ANALYZING
+                and event.to_state == CustodyState.MANUAL_REVIEW
+            ),
+            None,
+        )
+        if abstention_event is None:
+            return None
+        completed = self.repository.mark_outbox_execution(
+            outbox.id,
+            OutboxStatus.COMPLETE,
+            claim_token=claim_token,
+            completed_at=self.clock(),
+        )
+        return {
+            "outbox": completed,
+            "case": CaseView.from_record(case),
+            "replayed": False,
+            "agent_abstained": True,
+            "manual_action_required": True,
+        }
+
     def _terminalize_analysis_failure(
         self,
         case: CaseRecord,
@@ -853,12 +897,19 @@ class CustodyService:
 
     def _process_analysis(self, outbox, claim_token: str) -> dict:
         case = self.repository.get_case(outbox.case_id)
-        recovered = self._recover_analysis_failure(case, outbox, claim_token)
+        recovered = self._recover_analysis_abstention(case, outbox, claim_token)
+        if recovered is None:
+            recovered = self._recover_analysis_failure(case, outbox, claim_token)
         if recovered is not None:
             return recovered
         if case.state == CustodyState.ANALYZING:
             candidates = self.repository.list_candidates()
             try:
+                # Recompute the admissible packet at the custody boundary.
+                # An analyst adapter may inspect this packet, but it cannot
+                # broaden, reorder, or select from the repository inventory.
+                policy_packet = deterministic_candidate_packet(case, candidates)
+                policy_packet_ids = [candidate.id for candidate in policy_packet]
                 analysis_result = self.analyst.analyze(case, candidates)
                 if len(analysis_result) == 3:
                     run_id, proposal, execution = analysis_result
@@ -870,21 +921,85 @@ class CustodyService:
                 authorized_ids = {candidate.id for candidate in candidates}
                 if set(proposal.ranked_candidate_ids) - authorized_ids:
                     raise Conflict("agent_scope_violation", "The analyst referenced an unauthorized candidate.")
-                selected = (
-                    self.repository.get_candidate(proposal.selected_candidate_id)
-                    if proposal.selected_candidate_id
-                    else None
-                )
-                if not selected:
-                    raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
-                if proposal.restricted_attribute_id != selected.restricted_attribute_id:
+                if proposal.ranked_candidate_ids != policy_packet_ids:
                     raise Conflict(
-                        "agent_discriminator_invalid",
-                        "The analyst proposed an attribute that is not available as restricted staff evidence.",
+                        "agent_candidate_packet_drift",
+                        "The analyst did not preserve the custody engine's deterministic candidate packet.",
                     )
+                if proposal.decision == ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR:
+                    if proposal.selected_candidate_id != policy_packet_ids[0]:
+                        raise Conflict(
+                            "agent_candidate_packet_drift",
+                            "The analyst did not retain the policy-ranked candidate for its private-question proposal.",
+                        )
+                    selected = (
+                        self.repository.get_candidate(proposal.selected_candidate_id)
+                        if proposal.selected_candidate_id
+                        else None
+                    )
+                    if not selected:
+                        raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
+                    if proposal.restricted_attribute_id != selected.restricted_attribute_id:
+                        raise Conflict(
+                            "agent_discriminator_invalid",
+                            "The analyst proposed an attribute that is not available as restricted staff evidence.",
+                        )
             except (Unavailable, Conflict) as exc:
                 self._terminalize_analysis_failure(case, outbox, exc, claim_token)
                 raise
+            if proposal.decision == ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW:
+                abstention_reason = {
+                    "evidence_inconclusive": "The bounded Case Analyst abstained from a private question because the authorized evidence was inconclusive.",
+                    "visible_signal_conflict": "The bounded Case Analyst abstained from a private question because the authorized visible signals conflicted.",
+                }[proposal.manual_review_reason]
+                self._mutation(
+                    case=case,
+                    target=CustodyState.MANUAL_REVIEW,
+                    event_type="ANALYST_ABSTAINED",
+                    actor="agent:case-analyst",
+                    reason=abstention_reason,
+                    key=f"outbox:{outbox.id}:agent-abstained",
+                    fingerprint_data={"outbox_id": outbox.id, "proposal": proposal.model_dump(mode="json")},
+                    updates={
+                        "candidate_ids": [],
+                        "selected_item_id": None,
+                        "next_question": None,
+                        "policy_outcome": PolicyOutcome.REQUIRE_REVIEW,
+                        "model_run_id": run_id,
+                        "model_trace_id": execution.trace_id if execution is not None else None,
+                        "model_name": self.analyst.model_name,
+                        "model_mode": self.analyst.mode,
+                        "model_prompt_version": self.analyst.prompt_version,
+                        "model_output_schema_version": self.analyst.output_schema_version,
+                        "model_invocation_count": (
+                            execution.invocation_count if execution is not None else None
+                        ),
+                        "model_tool_trajectory": (
+                            execution.tool_trajectory if execution is not None else []
+                        ),
+                        "model_typed_output_valid": (
+                            execution.typed_output_valid if execution is not None else False
+                        ),
+                    },
+                    tool="case_analyst.request_manual_review",
+                    task_id=outbox.task_name,
+                    model_run_id=run_id,
+                    execution_claim_outbox_id=outbox.id,
+                    execution_claim_token=claim_token,
+                )
+                completed = self.repository.mark_outbox_execution(
+                    outbox.id,
+                    OutboxStatus.COMPLETE,
+                    claim_token=claim_token,
+                    completed_at=self.clock(),
+                )
+                return {
+                    "outbox": completed,
+                    "case": CaseView.from_record(self.repository.get_case(case.id)),
+                    "replayed": False,
+                    "agent_abstained": True,
+                    "manual_action_required": True,
+                }
             self._mutation(
                 case=case,
                 target=CustodyState.CANDIDATES_READY,
@@ -903,6 +1018,8 @@ class CustodyService:
                     "model_trace_id": execution.trace_id if execution is not None else None,
                     "model_name": self.analyst.model_name,
                     "model_mode": self.analyst.mode,
+                    "model_prompt_version": self.analyst.prompt_version,
+                    "model_output_schema_version": self.analyst.output_schema_version,
                     "model_invocation_count": (
                         execution.invocation_count if execution is not None else None
                     ),

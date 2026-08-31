@@ -118,6 +118,19 @@ test("public, claimant, and relay chrome policies expose no staff menu, identity
   }
 });
 
+test("the public judge surface does not imply an unpublished demo video exists", async () => {
+  const walkthrough = await readFile(path.join(projectRoot, "src", "components", "JudgeWalkthrough.jsx"), "utf8");
+  assert.doesNotMatch(walkthrough, /shown in the public demo video/i);
+  assert.match(walkthrough, /protected workflow remains separate from this read-only projection/i);
+});
+
+test("the public judge surface does not represent redacted analyst metadata as private proof", async () => {
+  const walkthrough = await readFile(path.join(projectRoot, "src", "components", "JudgeWalkthrough.jsx"), "utf8");
+  assert.doesNotMatch(walkthrough, /private evidence receipt/i);
+  assert.match(walkthrough, /Execution record/);
+  assert.match(walkthrough, /Present — redacted metadata only/);
+});
+
 test("connected actions resolve only to an authoritative hydrate action", async () => {
   const originalAction = { type: "APPROVE" };
   const serviceProjection = { authoritative: true, state: "APPROVAL_REQUIRED", version: 15 };

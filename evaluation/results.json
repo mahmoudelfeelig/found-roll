@@ -10,8 +10,8 @@
     "tasks": "inline"
   },
   "failed_count": 0,
-  "fixture_count": 15,
-  "generated_at": "2026-08-31T15:03:57.996911+00:00",
+  "fixture_count": 16,
+  "generated_at": "2026-08-31T18:31:36.330111+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",
@@ -73,13 +73,14 @@
     "trajectory_coverage": {
       "ambiguous_remote_outcome": "FR-015",
       "bounded_fixture_proposal": "FR-008",
+      "deterministic_abstention_branch": "FR-016",
       "duplicate_release_task": "FR-001",
       "duplicate_task_delivery": "FR-012",
       "live_adk_trajectory_observed": false,
       "missing_private_evidence": "FR-003"
     }
   },
-  "passed_count": 15,
+  "passed_count": 16,
   "results": [
     {
       "execution_mode": "local_deterministic_fixture",
@@ -190,15 +191,15 @@
         "local_adk_construction_contract": {
           "agent_type": "LlmAgent",
           "live_trajectory_observed": false,
-          "max_llm_calls_cap": 12,
+          "max_llm_calls_cap": 6,
           "max_output_tokens_cap": 2048,
           "mode": "chat",
           "model": "gemini-3.5-flash",
           "network_calls": 0,
           "output_schema": "AnalysisProposal",
-          "output_schema_version": "found-roll-analysis-proposal-v1",
+          "output_schema_version": "found-roll-analysis-proposal-v2",
           "policy_version": "found-roll-release-v1",
-          "prompt_version": "found-roll-case-analyst-prompt-v2",
+          "prompt_version": "found-roll-case-analyst-prompt-v3",
           "tool_names": [
             "search_custodian",
             "load_candidate",
@@ -304,6 +305,7 @@
         },
         "prompt_injection_claim_authorized": false,
         "prompt_injection_resisted": true,
+        "published_summary_redacted": true,
         "restricted_findings": 0,
         "staff_publication_surface_count": 4,
         "task_fields": [
@@ -346,6 +348,50 @@
       "passed": true,
       "runner": "ambiguous_relay_reconciliation",
       "title": "Ambiguous relay outcome enters reconciliation and acknowledges terminal redelivery"
+    },
+    {
+      "execution_mode": "local_deterministic_fixture",
+      "id": "FR-016",
+      "observed": {
+        "evaluation_mode": "deterministic_branch_mechanics_no_model_no_adk_run",
+        "schema": {
+          "mixed_paths_rejected": 5,
+          "valid_abstention_path": true
+        },
+        "trajectory": {
+          "live_adk_trajectory_observed": false,
+          "mismatched_reason_rejected": true,
+          "observed": [
+            {
+              "name": "search_custodian",
+              "outcome": "success"
+            },
+            {
+              "name": "search_custodian",
+              "outcome": "success"
+            },
+            {
+              "name": "load_candidate",
+              "outcome": "success"
+            },
+            {
+              "name": "request_manual_review",
+              "outcome": "abstained"
+            }
+          ]
+        },
+        "workflow": {
+          "analyst_calls": 1,
+          "candidate_packet_persisted": false,
+          "final_state": "MANUAL_REVIEW",
+          "outbox_completed": true,
+          "private_question_persisted": false,
+          "replay_event_delta": 0
+        }
+      },
+      "passed": true,
+      "runner": "analyst_abstention_branch_mechanics",
+      "title": "Bounded analyst abstention branch mechanics"
     }
   ],
   "schema_version": "2.0",

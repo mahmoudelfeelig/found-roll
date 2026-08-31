@@ -114,6 +114,8 @@ def test_invalid_correlation_is_replaced_and_health_reports_inventory_config(cap
     assert response.json()["inventory_gateway_configured"] is True
     assert response.json()["inventory_gateway_ready"] is True
     assert response.json()["inventory_timeout_seconds"] == 3.0
+    assert response.json()["analyst_wall_clock_timeout_seconds"] == 240.0
+    assert response.json()["task_dispatch_deadline_seconds"] == 305
 
 
 def test_only_allowlisted_analysis_code_enters_request_log(caplog):
@@ -124,7 +126,7 @@ def test_only_allowlisted_analysis_code_enters_request_log(caplog):
         mode = "test-failed-analyst"
         model_name = "test-failed-analyst"
         prompt_version = "test-failed-analyst"
-        output_schema_version = "found-roll-analysis-proposal-v1"
+        output_schema_version = "found-roll-analysis-proposal-v2"
 
         @staticmethod
         def analyze(_case, _candidates):
@@ -162,4 +164,5 @@ def test_only_allowlisted_analysis_code_enters_request_log(caplog):
     )
     rendered = safe_handler.format(task_record)
     assert private_message not in rendered
+    assert safe_analysis_error_code("adk_wall_clock_timeout") == "adk_wall_clock_timeout"
     assert safe_analysis_error_code("untrusted_dynamic_failure_code") is None

@@ -355,8 +355,9 @@ function validRunReceipt({ commit, tree, versions, runId, ordinal, workflowEpoch
     live_agent: {
       model_run_id: `model-run-00${ordinal}`,
       trace_id: `trace-run-00${ordinal}`,
-      invocation_count: 4,
+      invocation_count: 6,
       tool_trajectory: [
+        { name: "search_custodian", outcome: "success" },
         { name: "search_custodian", outcome: "success" },
         { name: "load_candidate", outcome: "success" },
         { name: "submit_observations", outcome: "success" },
@@ -454,8 +455,8 @@ async function createFixture(t) {
   await writeFile(path.join(repoRoot, "docs", "release.md"), "# Release\nCanonical evidence is bound by digest.\n", "utf8");
 
   const versions = {
-    prompt: "found-roll-case-analyst-prompt-v2",
-    output_schema: "found-roll-analysis-proposal-v1",
+    prompt: "found-roll-case-analyst-prompt-v3",
+    output_schema: "found-roll-analysis-proposal-v2",
     policy: "found-roll-release-v1",
   };
   const sourceContents = {
@@ -519,6 +520,7 @@ async function createFixture(t) {
     "publication_privacy",
     "token_replay",
     "ambiguous_relay_reconciliation",
+    "analyst_abstention_branch_mechanics",
   ];
   const localFixtureRows = localRunners.map((runner, index) => ({
     id: `FR-${String(index + 1).padStart(3, "0")}`,
@@ -546,8 +548,8 @@ async function createFixture(t) {
     schema_version: "2.0",
     suite_id: "found-roll-local-safety-v2",
     status: "LOCAL_PASS_CANONICAL_INCOMPLETE",
-    fixture_count: 15,
-    passed_count: 15,
+    fixture_count: localFixtureRows.length,
+    passed_count: localFixtureRows.length,
     failed_count: 0,
     execution_boundary: localExecutionBoundary,
     results: localFixtureRows.map((fixture) => ({
@@ -557,10 +559,24 @@ async function createFixture(t) {
       execution_mode: "local_deterministic_fixture",
       passed: true,
       observed: fixture.id === "FR-008"
-        ? { local_adk_construction_contract: { max_llm_calls_cap: 12, max_output_tokens_cap: 2048, live_trajectory_observed: false } }
+        ? { local_adk_construction_contract: { max_llm_calls_cap: 6, max_output_tokens_cap: 2048, live_trajectory_observed: false } }
         : fixture.id === "FR-015"
           ? { final_state: "RECONCILIATION_REQUIRED", outbox_status: "FAILED", relay_calls: 1, retry_event_delta: 0, terminal_ack_status: 200, terminal_failure_acknowledged: true, retryable: false, manual_action_required: true }
-          : {},
+          : fixture.id === "FR-016"
+            ? {
+                evaluation_mode: "deterministic_branch_mechanics_no_model_no_adk_run",
+                schema: { valid_abstention_path: true, mixed_paths_rejected: 5 },
+                trajectory: { live_adk_trajectory_observed: false, mismatched_reason_rejected: true },
+                workflow: {
+                  final_state: "MANUAL_REVIEW",
+                  outbox_completed: true,
+                  candidate_packet_persisted: false,
+                  private_question_persisted: false,
+                  analyst_calls: 1,
+                  replay_event_delta: 0,
+                },
+              }
+            : {},
     })),
   })}\n`;
   const privacyCanaryManifest = '{"schema_version":"1","canaries":[]}\n';
@@ -2060,6 +2076,24 @@ test("canonical run timing includes preparation and rejects the old impossible o
   assert.equal(failureCodes(result).has("CANONICAL_RUN_TIME"), true);
 });
 
+test("canonical preparation receipts use the single Z-suffixed timestamp format", async (t) => {
+  const validFixture = await createFixture(t);
+  const validResult = await verifySubmissionReadiness(validFixture.record, validFixture);
+  assert.equal(failureCodes(validResult).has("UTC_TIMESTAMP_REQUIRED"), false);
+
+  const fixture = await createFixture(t);
+  fixture.preparationReceipts[0].prepared_at = "2026-08-29T20:00:00.0000000+00:00";
+  await writeJson(fixture.preparationPaths[0], fixture.preparationReceipts[0]);
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(result).has("UTC_TIMESTAMP_REQUIRED"), true);
+
+  const nonIsoFixture = await createFixture(t);
+  nonIsoFixture.preparationReceipts[0].prepared_at = "Mon, 31 Aug 2026 15:56:41Z";
+  await writeJson(nonIsoFixture.preparationPaths[0], nonIsoFixture.preparationReceipts[0]);
+  const nonIsoResult = await verifySubmissionReadiness(nonIsoFixture.record, nonIsoFixture);
+  assert.equal(failureCodes(nonIsoResult).has("UTC_TIMESTAMP_REQUIRED"), true);
+});
+
 test("teardown identity ignores stale billing evidence but requires the frozen release identity", async (t) => {
   const fixture = await createFixture(t);
   fixture.record.created_at_utc = "2026-01-01T00:00:00Z";
@@ -2301,15 +2335,15 @@ test("five canonical runs require unique preparations, fixed revisions, and a fi
   assert.equal(codes.has("VIDEO_RUN_BINDING"), true);
 });
 
-test("live trajectory accepts the frozen twelve-call boundary and rejects overflow", async (t) => {
+test("live trajectory accepts the frozen six-call boundary and rejects overflow", async (t) => {
   const fixture = await createFixture(t);
-  fixture.runReceipts[0].live_agent.invocation_count = 12;
+  fixture.runReceipts[0].live_agent.invocation_count = 6;
   await rebindCanonicalPrivacy(fixture, { rewriteArtifacts: true });
 
   let result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.equal(result.ok, true, formatReadinessResult(result));
 
-  fixture.runReceipts[0].live_agent.invocation_count = 13;
+  fixture.runReceipts[0].live_agent.invocation_count = 7;
   const rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
   fixture.record.receipts.canonical_runs[0].run_sha256 = rewrittenRun.digest;
   result = await verifySubmissionReadiness(fixture.record, fixture);
@@ -2527,7 +2561,7 @@ test("frozen local evidence must match current bytes and retain its truthful inc
   const fixture = await createFixture(t);
   await writeFile(
     path.join(fixture.repoRoot, "evaluation", "results.json"),
-    '{"status":"CANONICAL_PASS","fixture_count":15,"passed_count":15,"failed_count":0}\n',
+    '{"status":"CANONICAL_PASS","fixture_count":16,"passed_count":16,"failed_count":0}\n',
     "utf8",
   );
 
@@ -3292,6 +3326,26 @@ test("the bound deployment runbook must retain the zero-money retry safeguards",
   fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(unsafeLeaseDeployment);
   const unsafeLeaseResult = await verifySubmissionReadiness(fixture.record, fixture);
   assert.equal(failureCodes(unsafeLeaseResult).has("DEPLOYMENT_SETUP"), true);
+
+  const unsafeWallClockDeployment = deployment.replace(
+    "FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS=240",
+    "FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS=241",
+  );
+  assert.notEqual(unsafeWallClockDeployment, deployment);
+  await writeFile(deploymentPath, unsafeWallClockDeployment, "utf8");
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(unsafeWallClockDeployment);
+  const unsafeWallClockResult = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(unsafeWallClockResult).has("DEPLOYMENT_SETUP"), true);
+
+  const unsafeTaskDeadlineDeployment = deployment.replace(
+    "FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS=305",
+    "FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS=300",
+  );
+  assert.notEqual(unsafeTaskDeadlineDeployment, deployment);
+  await writeFile(deploymentPath, unsafeTaskDeadlineDeployment, "utf8");
+  fixture.record.frozen_files.find((binding) => binding.path === "docs/deployment.md").sha256 = sha256(unsafeTaskDeadlineDeployment);
+  const unsafeTaskDeadlineResult = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(failureCodes(unsafeTaskDeadlineResult).has("DEPLOYMENT_SETUP"), true);
 
   const nonStandaloneTeardown = deployment.replace(
     /(## After judging: teardown[\s\S]*?)Set-StrictMode -Version Latest/,

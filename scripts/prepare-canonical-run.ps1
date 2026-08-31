@@ -132,6 +132,8 @@ if (-not $AllowLocalFixture) {
         task_header_required = $true
         task_oidc_required = $true
         inventory_legacy_health_compatibility = $false
+        analyst_wall_clock_timeout_seconds = 240
+        task_dispatch_deadline_seconds = 305
     }
     foreach ($entry in $expectedGuards.GetEnumerator()) {
         if ($appHealth.($entry.Key) -ne $entry.Value) {
@@ -346,7 +348,7 @@ $receipt = [ordered]@{
     schema_version = '2'
     status = 'PREPARED_FOR_ANALYSIS'
     canonical = -not $AllowLocalFixture
-    prepared_at = [DateTimeOffset]::UtcNow.ToString('o')
+    prepared_at = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", [Globalization.CultureInfo]::InvariantCulture)
     preparation_script_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
     case_id = $snapshot.case.id
     workflow_epoch = $snapshot.case.workflow_epoch

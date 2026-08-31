@@ -1,4 +1,4 @@
-"""Run the frozen FR-001..FR-015 local deterministic evaluation.
+"""Run the frozen FR-001..FR-016 local deterministic evaluation.
 
 This runner intentionally uses the in-memory repository, FixtureCaseAnalyst,
 inline tasks, and the in-process fixture relay. It makes zero Gemini or Google
@@ -28,13 +28,20 @@ sys.path.insert(0, str(SERVICE_ROOT))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.agent import FixtureCaseAnalyst, VertexAdkCaseAnalyst  # noqa: E402
+from app.agent import (  # noqa: E402
+    FixtureCaseAnalyst,
+    VertexAdkCaseAnalyst,
+    _observed_execution_evidence,
+    deterministic_candidate_packet,
+)
 from app.agent_contract import CASE_ANALYST_PROMPT_VERSION  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.domain import (  # noqa: E402
+    ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
     AnalysisProposal,
     CustodyState,
+    MANUAL_REVIEW_REASON_VISIBLE_SIGNAL_CONFLICT,
     PolicyOutcome,
     RiskTier,
     TokenPurpose,
@@ -630,7 +637,7 @@ def scenario_fixture_analyst_canonical(_context: RunContext) -> dict[str, Any]:
     require(tool_names == allowed_tools, "local_adk_tool_contract_changed")
     require(adk_agent.output_schema is AnalysisProposal, "local_adk_output_schema_changed")
     require(adk_agent.mode == "chat", "local_adk_root_mode_invalid")
-    require(adk_analyst.max_llm_calls == 12, "local_adk_call_cap_changed")
+    require(adk_analyst.max_llm_calls == 6, "local_adk_call_cap_changed")
     require(
         adk_agent.generate_content_config is not None
         and adk_agent.generate_content_config.max_output_tokens == 2048,
@@ -742,6 +749,226 @@ def scenario_fixture_analyst_no_eligible(_context: RunContext) -> dict[str, Any]
     raise ScenarioFailure("no_eligible_candidate_was_invented")
 
 
+def scenario_analyst_abstention_branch_mechanics(_context: RunContext) -> dict[str, Any]:
+    """Exercise a deterministic abstention contract without calling Gemini or ADK."""
+
+    ranked = deterministic_candidate_packet(
+        fixture_case(), fixture_candidates("evaluation-abstention-contract-pepper")
+    )
+    require(bool(ranked), "abstention_policy_packet_empty")
+    proposal = AnalysisProposal(
+        decision=ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+        ranked_candidate_ids=[item.id for item in ranked],
+        selected_candidate_id=None,
+        visible_signals=[],
+        evidence_sufficient_for_claim=False,
+        restricted_attribute_id=None,
+        next_question=None,
+        manual_review_reason=MANUAL_REVIEW_REASON_VISIBLE_SIGNAL_CONFLICT,
+        tool_trajectory=["untrusted-model-reported-value"],
+    )
+
+    invalid_schema_paths = {
+        "selected_candidate_id": ranked[0].id,
+        "visible_signals": ["synthetic visible signal"],
+        "restricted_attribute_id": "synthetic_restricted_attribute",
+        "next_question": "Which synthetic marking is recorded by staff?",
+        "manual_review_reason": "invented_reason",
+    }
+    for field, value in invalid_schema_paths.items():
+        invalid_payload = proposal.model_dump(mode="json")
+        invalid_payload[field] = value
+        invalid_schema_rejected = False
+        try:
+            AnalysisProposal.model_validate(invalid_payload)
+        except ValueError:
+            invalid_schema_rejected = True
+        require(invalid_schema_rejected, f"abstention_schema_{field}_accepted")
+
+    class DeterministicFunctionCall:
+        def __init__(self, call_id: str, name: str, args: dict[str, Any]) -> None:
+            self.id = call_id
+            self.name = name
+            self.args = args
+
+    class DeterministicFunctionResponse:
+        def __init__(self, call_id: str, name: str, response: dict[str, Any]) -> None:
+            self.id = call_id
+            self.name = name
+            self.response = response
+
+    class DeterministicEvent:
+        def __init__(
+            self,
+            event_id: str,
+            invocation_id: str,
+            calls: list[DeterministicFunctionCall],
+            responses: list[DeterministicFunctionResponse],
+        ) -> None:
+            self.id = event_id
+            self.invocation_id = invocation_id
+            self.usage_metadata = object()
+            self._calls = calls
+            self._responses = responses
+
+        def get_function_calls(self) -> list[DeterministicFunctionCall]:
+            return self._calls
+
+        def get_function_responses(self) -> list[DeterministicFunctionResponse]:
+            return self._responses
+
+    tenant_ids = sorted({item.tenant_id for item in ranked})
+    calls = [
+        *(
+            DeterministicFunctionCall(
+                f"search-{tenant_id}", "search_custodian", {"tenant_id": tenant_id}
+            )
+            for tenant_id in tenant_ids
+        ),
+        DeterministicFunctionCall(
+            "load-policy-ranked", "load_candidate", {"candidate_id": ranked[0].id}
+        ),
+        DeterministicFunctionCall(
+            "manual-review",
+            "request_manual_review",
+            {"reason_code": proposal.manual_review_reason},
+        ),
+    ]
+    responses = [
+        *(
+            DeterministicFunctionResponse(call.id, call.name, {"accepted": True})
+            for call in calls[:-1]
+        ),
+        DeterministicFunctionResponse(
+            "manual-review",
+            "request_manual_review",
+            {
+                "review_requested": True,
+                "reason_code": proposal.manual_review_reason,
+                "approved": False,
+            },
+        ),
+    ]
+    invocation_id = "deterministic-abstention-contract"
+    execution = _observed_execution_evidence(
+        events=[DeterministicEvent("abstention-llm", invocation_id, calls, responses)],
+        ranked_candidates=ranked,
+        proposal=proposal,
+    )
+    observed_trajectory = [
+        {"name": item.name, "outcome": item.outcome} for item in execution.tool_trajectory
+    ]
+    expected_trajectory = [
+        *({"name": "search_custodian", "outcome": "success"} for _ in tenant_ids),
+        {"name": "load_candidate", "outcome": "success"},
+        {"name": "request_manual_review", "outcome": "abstained"},
+    ]
+    require(observed_trajectory == expected_trajectory, "abstention_trajectory_wrong")
+
+    mismatched_calls = [*calls]
+    mismatched_calls[-1] = DeterministicFunctionCall(
+        "manual-review",
+        "request_manual_review",
+        {"reason_code": "evidence_inconclusive"},
+    )
+    mismatched_reason_rejected = False
+    try:
+        _observed_execution_evidence(
+            events=[DeterministicEvent("abstention-mismatch", invocation_id, mismatched_calls, responses)],
+            ranked_candidates=ranked,
+            proposal=proposal,
+        )
+    except Conflict as exc:
+        mismatched_reason_rejected = exc.code == "agent_manual_review_binding_invalid"
+    require(mismatched_reason_rejected, "abstention_reason_mismatch_accepted")
+
+    analyst_calls = 0
+
+    class DeterministicAbstainingAnalyst:
+        mode = "evaluation_deterministic_abstention"
+        model_name = "deterministic-evaluation-no-model"
+        prompt_version = CASE_ANALYST_PROMPT_VERSION
+        output_schema_version = ANALYSIS_PROPOSAL_SCHEMA_VERSION
+
+        def analyze(self, _case: Any, _candidates: list[Any]) -> tuple[str, AnalysisProposal, Any]:
+            nonlocal analyst_calls
+            analyst_calls += 1
+            return "evaluation-abstention-run", proposal, execution
+
+    app, client = new_client()
+    with client:
+        before_events = len(event_items(client))
+        case = current_case(client)
+        started = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={
+                "expected_version": case["version"],
+                "idempotency_key": "fr016-analysis-001",
+            },
+        )
+        require(started.status_code == 200, "abstention_analysis_start_failed")
+        task_payload = started.json()["task"]["payload"]
+        # Start through the unchanged fixture-only evidence gate, then replace
+        # the analyst at the execution boundary. This keeps the scenario a
+        # deterministic branch contract rather than a claim about uploaded
+        # evidence or a live model invocation.
+        app.state.custody_service.analyst = DeterministicAbstainingAnalyst()
+        completed = client.post("/tasks/outbox", json=task_payload)
+        require(completed.status_code == 200, "abstention_analysis_task_failed")
+        body = completed.json()
+        case_after = body["case"]
+        require(body.get("agent_abstained") is True, "abstention_result_not_marked")
+        require(body.get("manual_action_required") is True, "abstention_manual_action_missing")
+        require(body["outbox"]["status"] == "COMPLETE", "abstention_outbox_not_complete")
+        require(case_after["state"] == "MANUAL_REVIEW", "abstention_state_wrong")
+        require(case_after["selected_item_id"] is None, "abstention_selected_candidate_persisted")
+        require(case_after["next_question"] is None, "abstention_question_persisted")
+        require(case_after["policy_outcome"] == "REQUIRE_REVIEW", "abstention_policy_outcome_wrong")
+        require(
+            case_after["model_prompt_version"] == CASE_ANALYST_PROMPT_VERSION,
+            "abstention_prompt_version_missing",
+        )
+        require(
+            case_after["model_output_schema_version"] == ANALYSIS_PROPOSAL_SCHEMA_VERSION,
+            "abstention_schema_version_missing",
+        )
+        event_types = [item["type"] for item in event_items(client)]
+        require(event_types.count("ANALYST_ABSTAINED") == 1, "abstention_event_missing")
+        require(
+            "CANDIDATE_PACKET_PROPOSED" not in event_types,
+            "abstention_candidate_packet_persisted",
+        )
+        replay = client.post("/tasks/outbox", json=task_payload)
+        require(replay.status_code == 200, "abstention_replay_not_acknowledged")
+        require(replay.json()["replayed"] is True, "abstention_replay_not_marked")
+        require(analyst_calls == 1, "abstention_replay_called_analyst")
+        require(
+            len(event_items(client)) == before_events + 3,
+            "abstention_replay_appended_event",
+        )
+
+    return {
+        "evaluation_mode": "deterministic_branch_mechanics_no_model_no_adk_run",
+        "schema": {
+            "valid_abstention_path": True,
+            "mixed_paths_rejected": len(invalid_schema_paths),
+        },
+        "trajectory": {
+            "observed": observed_trajectory,
+            "mismatched_reason_rejected": True,
+            "live_adk_trajectory_observed": False,
+        },
+        "workflow": {
+            "final_state": "MANUAL_REVIEW",
+            "outbox_completed": True,
+            "candidate_packet_persisted": False,
+            "private_question_persisted": False,
+            "analyst_calls": analyst_calls,
+            "replay_event_delta": 0,
+        },
+    }
+
+
 def scenario_stale_case_version(_context: RunContext) -> dict[str, Any]:
     _app, client = new_client()
     with client:
@@ -825,11 +1052,61 @@ def scenario_publication_privacy(context: RunContext) -> dict[str, Any]:
         )
         for field in ("restricted_value_hash", "claimant_token_hash", "custodian_token_hash"):
             require(field not in serialized, "restricted_field_leaked_to_staff_publication_surface")
-        context.add_publication_artifact("fr-013-staff-publication-surfaces.json", surfaces)
+        # The actual staff-only responses above are used only in-memory for this
+        # local contract assertion. The checked repository artifact is a
+        # redacted summary: publishing synthetic IDs, task names, model-run
+        # identifiers, or idempotency keys would teach the wrong boundary for a
+        # future non-synthetic adaptation.
+        publication_summary = {
+            "schema_version": "1",
+            "artifact_type": "redacted_local_staff_surface_summary",
+            "execution_boundary": (
+                "Local synthetic fixture only; this summary is not a production or public runtime receipt."
+            ),
+            "source_surface_names": sorted(surfaces),
+            "opaque_task_field_names": sorted(task),
+            "source_surface_counts": {
+                "staff_candidate_items": len(surfaces["staff_candidates"].get("items", [])),
+                "staff_event_items": len(surfaces["staff_events"].get("items", [])),
+                "staff_snapshot_candidates": len(
+                    surfaces["staff_demo_snapshot"].get("candidates", [])
+                ),
+                "staff_snapshot_outboxes": len(surfaces["staff_demo_snapshot"].get("outbox", [])),
+            },
+            "privacy_assertions": {
+                "private_answer_included": False,
+                "restricted_hash_or_token_fields_included": False,
+                "raw_actor_ids_included": False,
+                "idempotency_keys_included": False,
+                "task_identifier_values_included": False,
+                "model_run_identifier_included": False,
+            },
+        }
+        summary_serialized = json_text(publication_summary)
+        for field in (
+            "actor",
+            "idempotency_key",
+            "task_id",
+            "model_run_id",
+            "event_hash",
+            "previous_hash",
+        ):
+            require(
+                f'"{field}"' not in summary_serialized,
+                "publication_summary_identifier_field_leaked",
+            )
+        for value in (
+            task["case_id"],
+            task["outbox_id"],
+            surfaces["staff_demo_snapshot"]["case"]["model_run_id"],
+        ):
+            require(value not in summary_serialized, "publication_summary_identifier_value_leaked")
+        context.add_publication_artifact("fr-013-staff-publication-surfaces.json", publication_summary)
         return {
             "task_fields": sorted(task),
             "staff_publication_surface_count": len(surfaces) - 1,
             "restricted_findings": 0,
+            "published_summary_redacted": True,
             "prompt_injection_resisted": True,
             "prompt_injection_claim_authorized": False,
             "next_evidence_evaluation": {
@@ -966,6 +1243,7 @@ SCENARIOS: dict[str, Callable[[RunContext], dict[str, Any]]] = {
     "fixture_analyst_canonical": scenario_fixture_analyst_canonical,
     "fixture_analyst_route_conflict": scenario_fixture_analyst_route_conflict,
     "fixture_analyst_no_eligible": scenario_fixture_analyst_no_eligible,
+    "analyst_abstention_branch_mechanics": scenario_analyst_abstention_branch_mechanics,
     "stale_case_version": scenario_stale_case_version,
     "duplicate_analysis_task": scenario_duplicate_analysis_task,
     "publication_privacy": scenario_publication_privacy,
@@ -1030,6 +1308,7 @@ def aggregate_local_fixture_metrics(results: list[dict[str, Any]]) -> dict[str, 
         },
         "trajectory_coverage": {
             "bounded_fixture_proposal": "FR-008",
+            "deterministic_abstention_branch": "FR-016",
             "missing_private_evidence": "FR-003",
             "duplicate_task_delivery": "FR-012",
             "ambiguous_remote_outcome": "FR-015",
@@ -1102,7 +1381,7 @@ def write_artifacts(context: RunContext, report: dict[str, Any]) -> None:
 def main() -> int:
     suite = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
     fixture_ids = [fixture["id"] for fixture in suite["fixtures"]]
-    require(fixture_ids == [f"FR-{index:03d}" for index in range(1, 16)], "fixture_id_matrix_invalid")
+    require(fixture_ids == [f"FR-{index:03d}" for index in range(1, 17)], "fixture_id_matrix_invalid")
     context = RunContext()
     results = []
     for fixture in suite["fixtures"]:

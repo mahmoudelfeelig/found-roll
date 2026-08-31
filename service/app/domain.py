@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-MAX_LLM_INVOCATIONS = 12
+MAX_LLM_INVOCATIONS = 6
 
 
 def utc_now() -> datetime:
@@ -223,6 +223,8 @@ class CaseRecord(BaseModel):
     model_trace_id: str | None = None
     model_name: str | None = None
     model_mode: str | None = None
+    model_prompt_version: str | None = None
+    model_output_schema_version: str | None = None
     model_invocation_count: int | None = Field(default=None, ge=0, le=MAX_LLM_INVOCATIONS)
     model_tool_trajectory: list[AgentToolOutcome] = Field(default_factory=list, max_length=12)
     model_typed_output_valid: bool = False
@@ -376,7 +378,21 @@ class IdempotencyRecord(BaseModel):
     created_at: datetime
 
 
-ANALYSIS_PROPOSAL_SCHEMA_VERSION = "found-roll-analysis-proposal-v1"
+ANALYSIS_PROPOSAL_SCHEMA_VERSION = "found-roll-analysis-proposal-v2"
+
+ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR = "REQUEST_PRIVATE_DISCRIMINATOR"
+ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW = "ABSTAIN_TO_MANUAL_REVIEW"
+MANUAL_REVIEW_REASON_EVIDENCE_INCONCLUSIVE = "evidence_inconclusive"
+MANUAL_REVIEW_REASON_VISIBLE_SIGNAL_CONFLICT = "visible_signal_conflict"
+
+AnalysisDecision = Literal[
+    "REQUEST_PRIVATE_DISCRIMINATOR",
+    "ABSTAIN_TO_MANUAL_REVIEW",
+]
+ManualReviewReason = Literal[
+    "evidence_inconclusive",
+    "visible_signal_conflict",
+]
 
 
 class AnalysisProposal(BaseModel):
@@ -384,6 +400,7 @@ class AnalysisProposal(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    decision: AnalysisDecision
     ranked_candidate_ids: list[str] = Field(min_length=1, max_length=5)
     selected_candidate_id: str | None
     visible_signals: list[str] = Field(max_length=8)
@@ -391,9 +408,9 @@ class AnalysisProposal(BaseModel):
     # an ADK output schema for Vertex AI. Keep the transport schema boolean and
     # enforce the same fail-closed invariant during typed validation instead.
     evidence_sufficient_for_claim: bool = Field(default=False, strict=True)
-    restricted_attribute_id: str
-    next_question: str = Field(min_length=12, max_length=240)
-    manual_review_reason: str | None = None
+    restricted_attribute_id: str | None
+    next_question: str | None = Field(default=None, min_length=12, max_length=240)
+    manual_review_reason: ManualReviewReason | None = None
     tool_trajectory: list[str] = Field(min_length=1, max_length=12)
 
     @field_validator("evidence_sufficient_for_claim")
@@ -405,11 +422,41 @@ class AnalysisProposal(BaseModel):
 
     @field_validator("next_question")
     @classmethod
-    def question_must_not_contain_numeric_answer(cls, value: str) -> str:
+    def question_must_not_contain_numeric_answer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         compact = "".join(ch for ch in value if ch.isalnum())
         if any(compact[index : index + 4].isdigit() for index in range(max(0, len(compact) - 3))):
             raise ValueError("claimant question must not contain a four-digit answer")
         return value
+
+    @model_validator(mode="after")
+    def proposal_action_matches_the_only_allowed_bounded_paths(self) -> "AnalysisProposal":
+        if self.decision == ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR:
+            if (
+                self.selected_candidate_id is None
+                or not self.visible_signals
+                or not self.restricted_attribute_id
+                or not self.next_question
+                or self.manual_review_reason is not None
+            ):
+                raise ValueError(
+                    "a private-discriminator proposal requires one selected candidate, visible signals, "
+                    "a discriminator, a question, and no manual-review reason"
+                )
+            return self
+        if (
+            self.selected_candidate_id is not None
+            or self.visible_signals
+            or self.restricted_attribute_id is not None
+            or self.next_question is not None
+            or self.manual_review_reason is None
+        ):
+            raise ValueError(
+                "an abstention proposal must omit candidate selection, signals, discriminator, and question "
+                "while using one allowed manual-review reason"
+            )
+        return self
 
 
 class PolicyDecision(BaseModel):
@@ -546,6 +593,8 @@ class CaseView(BaseModel):
     model_trace_id: str | None
     model_name: str | None
     model_mode: str | None
+    model_prompt_version: str | None
+    model_output_schema_version: str | None
     model_invocation_count: int | None
     model_tool_trajectory: list[AgentToolOutcome]
     model_typed_output_valid: bool
@@ -583,6 +632,8 @@ class CaseView(BaseModel):
             model_trace_id=case.model_trace_id,
             model_name=case.model_name,
             model_mode=case.model_mode,
+            model_prompt_version=case.model_prompt_version,
+            model_output_schema_version=case.model_output_schema_version,
             model_invocation_count=case.model_invocation_count,
             model_tool_trajectory=case.model_tool_trajectory,
             model_typed_output_valid=case.model_typed_output_valid,

@@ -1,6 +1,6 @@
 # Found Roll
 
-Found Roll is a policy-bound recovery workflow for lost property that falls between separate custodians. A bounded Gemini/Google ADK analyst searches authorized evidence and asks for the minimum missing private fact; deterministic code owns claim-evidence acceptance, identity and approval gates, custody state, one-time credentials, idempotency, and the final event manifest.
+Found Roll is a policy-bound recovery workflow for lost property that falls between separate custodians. Deterministic policy fixes the eligible candidate packet and allowed private discriminator. A bounded Gemini/Google ADK analyst may inspect that authorized packet and propose source-linked observations plus one non-leading question; deterministic code owns claim-evidence acceptance, identity and approval gates, custody state, one-time credentials, idempotency, and the final event manifest.
 
 The product is designed like practical early-2010s photo-organizer software rather than a contemporary AI dashboard. The agent is visible through its work and audit trail, not through a chat interface.
 
@@ -10,7 +10,7 @@ Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmou
 
 - One report begins with a fictional Grand Hall → Metro Loop → Northport Air route; the custody engine sends the analyst only to the currently eligible custodian inventories.
 - An ordinary intake is armed only after the combined demo-and-staff boundary accepts it. Once staff explicitly authorizes a derived model preview, the service itself commits the bounded-analysis outbox command for that immutable pair and queues it; the browser only observes and polls the result. The public manual-analysis route refuses armed intakes.
-- Visual similarity alone is refused. The deterministic custody engine fixes the eligible candidate packet; the bounded analyst inspects it and proposes one non-leading question, but cannot accept a claim or mutate custody.
+- Visual similarity alone is refused. The deterministic custody engine fixes the candidate ordering and allowed private discriminator; the bounded analyst can only formulate a typed, source-linked question proposal within that boundary. It cannot assert claim sufficiency, accept a claim, or mutate custody.
 - The valuable camera-pouch fixture needs an exact private serial fragment, a staff identity attestation, and supervisor approval.
 - Reservation and release use an outbox boundary, expected versions, remote eTags, and idempotency keys.
 - A separately deployable `SIMULATED Relay Post` records two scoped token presentations and returns a signed service attestation.
@@ -23,6 +23,8 @@ Northport Air, Metro Loop, Grand Hall, Relay Post, every inventory row, every ro
 
 The hosted root is a public, non-mutating Judge Walkthrough for the fixed completed synthetic case. It accepts no credentials and exposes only a redacted status/timeline, bounded-analyst metadata, and internal manifest-consistency summary. It omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs; it neither proves ownership nor possession nor performs a physical handoff.
 
+No public proof-of-action receipt is implemented or published. A future public artifact is a release-checklist item only and requires explicit authorization plus a separate privacy review before it can be designed, exposed, or described as evidence. It would not replace the private five-run evidence set, an independent ledger, model-quality evidence, or proof of ownership, identity, possession, or physical handoff.
+
 The staff workspace contains the custodian folder tree, dated evidence library, candidate metadata comparison, staff-only detail, evidence tray, release-policy inspector, credential state, and Item Passport playback in one dense desktop shell. Before all three runtime roles authenticate and the service returns an authoritative projection, that URL is a neutral locked shell with no case, candidate, timeline, or agent-run data. Once authenticated, it loads the active server-derived preview for the current workflow epoch. If that preview is unavailable, the workspace shows an unavailable state rather than substituting unrelated fixture media.
 
 The private claimant proof page exposes one non-leading question and no candidate library or staff-only evidence. Its one-time link is bound to one case version and expiry: only a keyed digest is persisted, while the raw token travels in the URL fragment, is immediately removed from the address bar, and remains in that browser tab's memory. A submission consumes the link; a wrong answer rotates it to the new case version, and expired, replayed, wrong-case, or stale-version links fail closed.
@@ -34,6 +36,17 @@ The hosted browser has three reusable runtime credential boundaries, not one sha
 The public [Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough) is the quickest no-credential check: it proves that the hosted root is read-only, redacted, and visually grounded in a closed synthetic case. It cannot mutate a case, reveal protected media, or stand in for the protected workflow.
 
 For a free local review, install the locked dependencies described below and run `npm test` plus `service\.venv\Scripts\python.exe -m pytest service\tests`. Those checks exercise the deterministic fixture, evidence/consent boundaries, auto-queue contract, state transitions, retries, and privacy surfaces without Google Cloud credentials, paid APIs, user media, or a billing account. They prove local contracts only; live Google Cloud claims require a separately frozen tagged release and its private evidence gate.
+
+## 90-second judge route
+
+| Window | Open or verify | What it establishes |
+| --- | --- | --- |
+| 0:00–0:20 | The public Judge Walkthrough | The hosted surface is synthetic, redacted, read-only, and does not expose credentials or protected media. |
+| 0:20–0:40 | The walkthrough's timeline and limitation copy | The fixed case is synthetic and public access remains a redacted, non-mutating product surface rather than workflow evidence. |
+| 0:40–1:05 | The [architecture diagram](docs/architecture-diagram.png) and its [authority explanation](docs/architecture.md) | The agent is confined to a deterministic packet and proposal tools; policy and humans own evidence acceptance and release. |
+| 1:05–1:30 | The public repository's evaluation and release disclosures | Local results remain local; the private five-run gate and recorded Google Cloud evidence carry the operational release claim. |
+
+No public proof-of-action artifact belongs in this route until it has separately received explicit authorization and privacy review.
 
 ## Local web prototype
 
@@ -114,7 +127,7 @@ service\.venv\Scripts\python.exe -m deployment.serve
 
 Open `http://127.0.0.1:8080/` to inspect the public redacted walkthrough, or `http://127.0.0.1:8080/?view=staff` for the protected staff workspace. The staff status bar must report the connected deterministic fixture analyst; `http://127.0.0.1:8080/api/v1/healthz` must report `inventory_mode=http`, `inventory_gateway_ready=true`, and `relay_mode=http`. Load the three local demo, staff, and supervisor values above into their matching password fields for this tab; the all-three probe must succeed before the staff projection loads. The UI's **Refresh case** command only reloads authoritative state; it does not reset either service. Restart both local processes for a fresh local repeat. For a deployed canonical run, reset and upload the frozen evidence pair from an authenticated terminal or Cloud Shell with `scripts/prepare-canonical-run.ps1`; no browser reset exists and the admin credential must never enter the frontend.
 
-Local fixture mode is intentionally not acceptable evidence for the canonical hackathon video. The live recording must show the pinned model, the Vertex ADK run, Cloud Run revisions, Firestore mutations, current-epoch Cloud Storage evidence provenance, Cloud Task delivery, the separate simulator request, and one duplicate completed-release task delivery acknowledged without another custody event from the prepared reset run. Consumed-token and callback-idempotency negatives remain machine-receipt evidence; the recording does not promise separate UI controls for them.
+Local fixture mode is intentionally not acceptable evidence for the canonical hackathon video. The live recording keeps one prepared synthetic case legible while correlating it to the serving Cloud Run revision, its Firestore state, its Cloud Task, and its bounded Gemini/ADK evidence. It also shows the separate simulator request and one duplicate completed-release task delivery acknowledged without another custody event. Consumed-token and callback-idempotency negatives remain machine-receipt evidence rather than promised UI controls. A public proof-of-action artifact is not part of the current UI or recording scope.
 
 ## Verification
 
@@ -125,7 +138,7 @@ npm run build
 npm test
 ```
 
-Frozen 15-case deterministic evaluation:
+Frozen 16-case deterministic evaluation:
 
 ```powershell
 service\.venv\Scripts\python.exe evaluation\run_evaluation.py
@@ -135,7 +148,7 @@ Service and simulator verification commands are documented within each service. 
 
 The checked design report is [`design-qa.md`](design-qa.md). Its screenshots and findings are a historical period-style and layout reference, not evidence for the current release workflow. Regenerate the viewports from the frozen submission build before using them in publication.
 
-Use fresh command output and the checked machine-readable receipts for component-test counts. The current frozen evaluation report records **15/15 local synthetic scenarios**, while candidate retrieval in the top three is only a **2/2 descriptive proxy** and usefulness is only **3/3 among question-bearing packets**. Both proxy samples are insufficient; their canonical thresholds remain `INCOMPLETE`, not passed. The deterministic run made **0 Gemini calls and 0 Google Cloud calls** and does not satisfy the canonical live gate.
+Use fresh command output and the checked machine-readable receipts for component-test counts. The current frozen evaluation report records **16/16 local synthetic scenarios**, including a deterministic abstention-branch mechanics check. Candidate retrieval in the top three is only a **2/2 descriptive proxy** and usefulness is only **3/3 among question-bearing packets**. Both proxy samples are insufficient; their canonical thresholds remain `INCOMPLETE`, not passed. The deterministic run made **0 Gemini calls and 0 Google Cloud calls** and does not satisfy the canonical live gate.
 
 Synthetic media provenance and dependency notices are recorded in [`public/assets/README.md`](public/assets/README.md), [`NOTICE.md`](NOTICE.md), and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
@@ -157,13 +170,13 @@ It fails closed unless the release binds the clean tagged Git tree, required fil
 - [`docs/threat-and-privacy.md`](docs/threat-and-privacy.md) — staff, claimant, and restricted evidence boundaries, logging rules, token and callback threats, IAM limits.
 - [`docs/evaluation-plan.md`](docs/evaluation-plan.md) — frozen fixtures, metrics, failure cases, and live-run evidence requirements.
 - [`docs/evaluation.md`](docs/evaluation.md) — verified local results with explicit limits and a separate account of operational cloud-release evidence.
-- [`docs/demo-script.md`](docs/demo-script.md) — a 3:35 recording plan with visible Google Cloud proof.
+- [`docs/demo-script.md`](docs/demo-script.md) — a 3:48 recording plan that keeps one matching Cloud Run/case/task/model proof legible.
 - [`docs/devpost-submission.md`](docs/devpost-submission.md) — release-bound submission copy whose cloud claims are valid only for the public `v1.0.0` tag.
 - [`docs/google-cloud-billing-preflight.template.json`](docs/google-cloud-billing-preflight.template.json) and [`docs/google-cloud-spend-cap.template.json`](docs/google-cloud-spend-cap.template.json) — fail-closed schema-v2 private receipt shapes for direct entrant Free Trial/service-cap attestation and live CLI billing-link/open-account binding; public APIs do not expose the Preview spend-cap enforcement state.
 - [`docs/canonical-run.template.json`](docs/canonical-run.template.json), [`docs/chain-audit.template.json`](docs/chain-audit.template.json), [`docs/canonical-privacy.template.json`](docs/canonical-privacy.template.json), and [`docs/clean-browser.template.json`](docs/clean-browser.template.json) — fail-closed private receipt shapes for the five live executions, recomputable event chains, and final publication review.
 
 ## Submission blockers that cannot be fabricated
 
-The repository never converts the 15/15 deterministic suite into a live-model accuracy claim. For public `v1.0.0`, the stable hosted URL, exact source-deployed app/simulator revisions, five live Gemini/Google ADK workflows, Free Trial boundary, required APIs/IAM/quota, storage ceiling, log privacy, clean Chrome behavior, and immutable Git commit are all bound by fail-closed private receipts before the tag is published. The entrant has confirmed entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and the research-informed—not first-person—inspiration mode. A public video URL and its verified duration can exist only after the continuous take is recorded and uploaded, and the final Devpost action remains deliberately manual; neither is fabricated in repository history.
+The repository never converts the 16/16 deterministic suite into a live-model accuracy claim. For public `v1.0.0`, the stable hosted URL, exact source-deployed app/simulator revisions, five live Gemini/Google ADK workflows, Free Trial boundary, required APIs/IAM/quota, storage ceiling, log privacy, clean Chrome behavior, and immutable Git commit are all bound by fail-closed private receipts before the tag is published. The entrant has confirmed entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and the research-informed—not first-person—inspiration mode. A public video URL and its verified duration can exist only after the continuous take is recorded and uploaded, and the final Devpost action remains deliberately manual; neither is fabricated in repository history.
 
 Found Roll's original project code is released under the [MIT License](LICENSE). Third-party dependencies and the bundled prototype-template boundary retain their upstream terms as recorded in [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md); the MIT grant does not relicense those materials.

@@ -199,6 +199,7 @@ def _components(
                 project=settings.google_cloud_project,
                 location=settings.google_cloud_location,
                 model_name=settings.model_name,
+                wall_clock_timeout_seconds=settings.analyst_wall_clock_timeout_seconds,
                 evidence_store=store,
                 inventory_gateway=resolved_inventory,
             )
@@ -427,6 +428,8 @@ def create_app(
             ),
             "inventory_gateway_ready": inventory_ready,
             "inventory_timeout_seconds": settings.inventory_timeout_seconds,
+            "analyst_wall_clock_timeout_seconds": settings.analyst_wall_clock_timeout_seconds,
+            "task_dispatch_deadline_seconds": settings.task_dispatch_deadline_seconds,
             "inventory_legacy_health_compatibility": (
                 settings.inventory_allow_legacy_health_without_environment
             ),

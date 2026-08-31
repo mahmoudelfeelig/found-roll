@@ -73,7 +73,7 @@
       "title": "Deterministic ranking, bounded local ADK contract, and useful abstention",
       "runner": "fixture_analyst_canonical",
       "implemented_surface": ["FixtureCaseAnalyst", "typed AnalysisProposal"],
-      "expected_assertions": ["canonical candidate is in the top three", "claim acceptance remains false", "question is non-leading and locally useful", "restricted values stay excluded", "offline ADK construction exposes only five proposal tools, typed output, single-turn mode, a twelve-call cap, and a 2048-output-token cap"],
+      "expected_assertions": ["canonical candidate is in the top three", "claim acceptance remains false", "question is non-leading and locally useful", "restricted values stay excluded", "offline ADK construction exposes only five proposal tools, typed output, single-turn mode, a six-call cap, and a 2048-output-token cap"],
       "not_covered": ["Gemini invocation", "live ADK trajectory", "model variance", "real image understanding"]
     },
     {
@@ -131,6 +131,14 @@
       "implemented_surface": ["release outbox", "failure transition", "reconciliation guard"],
       "expected_assertions": ["ambiguous response reaches RECONCILIATION_REQUIRED", "outbox is FAILED/EXECUTE", "terminal task redelivery receives a non-retryable 2xx acknowledgment", "manual reconciliation remains required", "relay is called once and no event is appended"],
       "not_covered": ["real network timeout", "remote reconciliation query", "Cloud Tasks retry scheduler"]
+    },
+    {
+      "id": "FR-016",
+      "title": "Bounded analyst abstention branch mechanics",
+      "runner": "analyst_abstention_branch_mechanics",
+      "implemented_surface": ["AnalysisProposal schema", "execution-evidence validator", "analysis outbox", "manual-review transition"],
+      "expected_assertions": ["the no-selection abstention schema validates while all mutually exclusive selection, signal, discriminator, question, and reason paths are rejected", "the deterministic tool protocol searches every authorized custodian, loads the policy-ranked candidate, and ends in an abstained manual-review request", "a mismatched manual-review reason is rejected", "the workflow records ANALYST_ABSTAINED, completes the outbox, persists no candidate packet or private question, and replays without another analyst call"],
+      "not_covered": ["Gemini invocation", "live Google ADK trajectory", "model abstention frequency or calibration", "Cloud Tasks delivery"]
     }
   ],
   "live_only_requirements": [

@@ -74,7 +74,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
             <dl>
               <div><dt>Execution mode</dt><dd>{data.agentic.mode}</dd></div>
               <div><dt>Model</dt><dd>{data.agentic.model_name}</dd></div>
-              <div><dt>Run recorded</dt><dd>{data.agentic.model_run_recorded ? "Yes — private evidence receipt" : "Not recorded"}</dd></div>
+              <div><dt>Execution record</dt><dd>{data.agentic.model_run_recorded ? "Present — redacted metadata only" : "Not recorded"}</dd></div>
               <div><dt>Tool steps retained</dt><dd>{data.agentic.bounded_tool_step_count}</dd></div>
             </dl>
             <p>The agent investigates and proposes a next question. Deterministic policy, staff attestation, supervisor approval, and the SIMULATED relay retain release authority.</p>
@@ -106,7 +106,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
         </main>
       )}
 
-      <footer className="judge-footer"><span className={`connection-${connection.status}`}><CloudCheck size={14} weight="fill" /> {connection.label}</span><span>Full protected live flow is shown in the public demo video.</span></footer>
+      <footer className="judge-footer"><span className={`connection-${connection.status}`}><CloudCheck size={14} weight="fill" /> {connection.label}</span><span>The protected workflow remains separate from this read-only projection.</span></footer>
     </div>
   );
 }

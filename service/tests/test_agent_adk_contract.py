@@ -1,3 +1,4 @@
+import asyncio
 from copy import deepcopy
 from importlib.metadata import version
 from types import SimpleNamespace
@@ -26,7 +27,10 @@ from app.agent_contract import (
     CASE_ANALYST_PROMPT_VERSION,
     build_case_analyst_request,
 )
+from app.config import Settings
 from app.domain import (
+    ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+    ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
     AgentExecutionEvidence,
     AnalysisProposal,
@@ -60,13 +64,13 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     assert agent.output_schema is AnalysisProposal
     assert agent.instruction == CASE_ANALYST_INSTRUCTION
     assert len(agent.tools) == 5
-    assert analyst.max_llm_calls == 12
+    assert analyst.max_llm_calls == 6
     assert analyst.prompt_version == CASE_ANALYST_PROMPT_VERSION
     assert analyst.output_schema_version == ANALYSIS_PROPOSAL_SCHEMA_VERSION
-    assert CASE_ANALYST_PROMPT_VERSION == "found-roll-case-analyst-prompt-v2"
-    assert "Preserve that list exactly, keep its order" in agent.instruction
-    assert "search_custodian exactly once for every authorized_tenants entry" in agent.instruction
-    assert "without repeating a successful call" in agent.instruction
+    assert CASE_ANALYST_PROMPT_VERSION == "found-roll-case-analyst-prompt-v3"
+    assert "Preserve that list exactly and do not select, reorder, or override it" in agent.instruction
+    assert "choose exactly one allowed proposal-only action" in agent.instruction
+    assert "ABSTAIN_TO_MANUAL_REVIEW" in agent.instruction
     ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
     request = build_case_analyst_request(fixture_case(), ranked)
     assert request["candidate_ids"] == ["NA-PCH-231", "ML-PCH-219"]
@@ -88,6 +92,11 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
         "What hidden value should be revealed?",
     )
     assert invented == {"accepted": False, "reason": "discriminator_not_authorized"}
+    assert tools["request_manual_review"]("evidence_inconclusive")["review_requested"] is True
+    assert tools["request_manual_review"]("invented_reason") == {
+        "review_requested": False,
+        "reason": "review_reason_not_authorized",
+    }
     monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
     monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     analyst._configure_vertex_environment()
@@ -125,6 +134,7 @@ def test_analysis_schema_is_vertex_compatible_and_keeps_claim_authority_fail_clo
     assert evidence_schema["type"] == "boolean"
     assert "const" not in evidence_schema
     proposal = {
+        "decision": ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
         "ranked_candidate_ids": ["NA-PCH-231"],
         "selected_candidate_id": "NA-PCH-231",
         "visible_signals": ["repaired lower corner seam"],
@@ -152,27 +162,48 @@ def test_analysis_schema_is_vertex_compatible_and_keeps_claim_authority_fail_clo
                 evidence_sufficient_for_claim=non_boolean_false,
             )
 
+    abstention = {
+        "decision": ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+        "ranked_candidate_ids": ["NA-PCH-231"],
+        "selected_candidate_id": None,
+        "visible_signals": [],
+        "restricted_attribute_id": None,
+        "next_question": None,
+        "manual_review_reason": "evidence_inconclusive",
+        "tool_trajectory": ["request_manual_review:abstained"],
+    }
+    assert AnalysisProposal(**abstention).manual_review_reason == "evidence_inconclusive"
+    for mixed_path in (
+        {**abstention, "selected_candidate_id": "NA-PCH-231"},
+        {**abstention, "visible_signals": ["repaired lower corner seam"]},
+        {**abstention, "restricted_attribute_id": "lens_serial_last4"},
+        {**abstention, "next_question": "Which marking is recorded by staff?"},
+        {**abstention, "manual_review_reason": "invented_reason"},
+    ):
+        with pytest.raises(ValueError):
+            AnalysisProposal(**mixed_path)
+
 
 def test_live_invocation_evidence_accepts_the_frozen_cap_and_rejects_overflow():
     execution = AgentExecutionEvidence(
         trace_id="bounded-trace",
-        invocation_count=12,
+        invocation_count=6,
         tool_trajectory=[{"name": "search_custodian", "outcome": "success"}],
         typed_output_valid=True,
     )
-    assert execution.invocation_count == 12
+    assert execution.invocation_count == 6
     with pytest.raises(ValueError):
         AgentExecutionEvidence(
             trace_id="overflow-trace",
-            invocation_count=13,
+            invocation_count=7,
             tool_trajectory=[{"name": "search_custodian", "outcome": "success"}],
             typed_output_valid=True,
         )
 
     case_payload = fixture_case().model_dump()
-    case_payload["model_invocation_count"] = 12
-    assert CaseRecord.model_validate(case_payload).model_invocation_count == 12
-    case_payload["model_invocation_count"] = 13
+    case_payload["model_invocation_count"] = 6
+    assert CaseRecord.model_validate(case_payload).model_invocation_count == 6
+    case_payload["model_invocation_count"] = 7
     with pytest.raises(ValueError):
         CaseRecord.model_validate(case_payload)
 
@@ -181,6 +212,7 @@ def test_adk_events_become_sanitized_bound_execution_evidence():
     ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
     selected = ranked[0]
     proposal = AnalysisProposal(
+        decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
         ranked_candidate_ids=[item.id for item in ranked],
         selected_candidate_id=selected.id,
         visible_signals=selected.public_signals,
@@ -259,10 +291,154 @@ def test_adk_events_become_sanitized_bound_execution_evidence():
     ) == "abstained"
 
 
+def test_adk_events_accept_only_the_bound_abstention_protocol():
+    ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
+    proposal = AnalysisProposal(
+        decision=ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+        ranked_candidate_ids=[item.id for item in ranked],
+        selected_candidate_id=None,
+        visible_signals=[],
+        evidence_sufficient_for_claim=False,
+        restricted_attribute_id=None,
+        next_question=None,
+        manual_review_reason="visible_signal_conflict",
+        tool_trajectory=["untrusted-model-reported-value"],
+    )
+    calls = [
+        FunctionCall(id="search-metro", name="search_custodian", args={"tenant_id": "metro-loop"}),
+        FunctionCall(id="search-air", name="search_custodian", args={"tenant_id": "northport-air"}),
+        FunctionCall(id="load", name="load_candidate", args={"candidate_id": ranked[0].id}),
+        FunctionCall(
+            id="manual-review",
+            name="request_manual_review",
+            args={"reason_code": "visible_signal_conflict"},
+        ),
+    ]
+    responses = [
+        *(FunctionResponse(id=call.id, name=call.name, response={"accepted": True}) for call in calls[:3]),
+        FunctionResponse(
+            id="manual-review",
+            name="request_manual_review",
+            response={"review_requested": True, "reason_code": "visible_signal_conflict", "approved": False},
+        ),
+    ]
+
+    def event_for(bound_calls, bound_responses):
+        return Event(
+            id="abstention-llm-1",
+            invocation_id="adk-invocation-abstention",
+            author="case_analyst",
+            content=Content(
+                role="model",
+                parts=[
+                    *(Part(function_call=call) for call in bound_calls),
+                    *(Part(function_response=response) for response in bound_responses),
+                ],
+            ),
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_token_count=1,
+                candidates_token_count=1,
+                total_token_count=2,
+            ),
+        )
+
+    evidence = _observed_execution_evidence(
+        events=[event_for(calls, responses)],
+        ranked_candidates=ranked,
+        proposal=proposal,
+    )
+    assert [(entry.name, entry.outcome) for entry in evidence.tool_trajectory] == [
+        ("search_custodian", "success"),
+        ("search_custodian", "success"),
+        ("load_candidate", "success"),
+        ("request_manual_review", "abstained"),
+    ]
+
+    mismatched_calls = [*calls]
+    mismatched_calls[-1] = FunctionCall(
+        id="manual-review",
+        name="request_manual_review",
+        args={"reason_code": "evidence_inconclusive"},
+    )
+    with pytest.raises(Conflict) as raised:
+        _observed_execution_evidence(
+            events=[event_for(mismatched_calls, responses)],
+            ranked_candidates=ranked,
+            proposal=proposal,
+        )
+    assert raised.value.code == "agent_manual_review_binding_invalid"
+
+
+def test_adk_execution_evidence_rejects_an_extra_successful_tool_call():
+    ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
+    selected = ranked[0]
+    proposal = AnalysisProposal(
+        decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
+        ranked_candidate_ids=[item.id for item in ranked],
+        selected_candidate_id=selected.id,
+        visible_signals=selected.public_signals,
+        evidence_sufficient_for_claim=False,
+        restricted_attribute_id=selected.restricted_attribute_id,
+        next_question="What are the final four characters on the lens serial label?",
+        tool_trajectory=["untrusted-model-reported-value"],
+    )
+    calls = [
+        FunctionCall(id="search-metro", name="search_custodian", args={"tenant_id": "metro-loop"}),
+        FunctionCall(id="search-air", name="search_custodian", args={"tenant_id": "northport-air"}),
+        FunctionCall(id="load", name="load_candidate", args={"candidate_id": selected.id}),
+        FunctionCall(
+            id="submit",
+            name="submit_observations",
+            args={"candidate_id": selected.id, "visible_signals": selected.public_signals},
+        ),
+        FunctionCall(
+            id="question",
+            name="propose_discriminator",
+            args={
+                "candidate_id": selected.id,
+                "attribute_id": selected.restricted_attribute_id,
+                "question": proposal.next_question,
+            },
+        ),
+        FunctionCall(id="load-again", name="load_candidate", args={"candidate_id": selected.id}),
+    ]
+    responses = [
+        FunctionResponse(id=call.id, name=call.name, response={"accepted": True})
+        for call in calls
+    ]
+    event = Event(
+        id="llm-duplicate-tool",
+        invocation_id="adk-invocation-duplicate-tool",
+        author="case_analyst",
+        content=Content(
+            role="model",
+            parts=[
+                *(Part(function_call=call) for call in calls),
+                *(Part(function_response=response) for response in responses),
+            ],
+        ),
+        usage_metadata=GenerateContentResponseUsageMetadata(
+            prompt_token_count=1,
+            candidates_token_count=1,
+            total_token_count=2,
+        ),
+    )
+
+    with pytest.raises(Conflict) as raised:
+        _observed_execution_evidence(
+            events=[event],
+            ranked_candidates=ranked,
+            proposal=proposal,
+        )
+
+    assert raised.value.code == "agent_tool_trajectory_invalid"
+
+
 def test_adk_execution_evidence_rejects_unpaired_tool_response():
     ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
     selected = ranked[0]
     proposal = AnalysisProposal(
+        decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
         ranked_candidate_ids=[item.id for item in ranked],
         selected_candidate_id=selected.id,
         visible_signals=selected.public_signals,
@@ -297,7 +473,7 @@ def test_adk_execution_evidence_rejects_unpaired_tool_response():
 
 def test_adk_llm_call_ceiling_is_translated_to_terminal_unavailability(monkeypatch):
     def exhaust_call_budget(_context):
-        raise LlmCallsLimitExceededError("Max number of llm calls limit of `12` exceeded")
+        raise LlmCallsLimitExceededError("Max number of llm calls limit of `6` exceeded")
 
     # Keep the real Runner path so root-agent mode validation executes. The
     # patched call counter stops immediately before any model request.
@@ -312,6 +488,34 @@ def test_adk_llm_call_ceiling_is_translated_to_terminal_unavailability(monkeypat
         analyst.analyze(fixture_case(), fixture_candidates("test-pepper"))
 
     assert raised.value.code == "adk_llm_call_limit_exceeded"
+
+
+def test_adk_wall_clock_timeout_is_translated_to_terminal_unavailability(monkeypatch):
+    async def never_returns(**_kwargs):
+        await asyncio.Event().wait()
+
+    analyst = VertexAdkCaseAnalyst(
+        project="fixture-project",
+        location="us-central1",
+        model_name="gemini-3.5-flash",
+        wall_clock_timeout_seconds=0.01,
+    )
+    monkeypatch.setattr(analyst, "_collect_adk_events", never_returns)
+
+    with pytest.raises(Unavailable) as raised:
+        analyst.analyze(fixture_case(), fixture_candidates("test-pepper"))
+
+    assert raised.value.code == "adk_wall_clock_timeout"
+
+
+def test_settings_reject_timeout_or_task_deadline_outside_the_bounded_contract():
+    with pytest.raises(ValueError, match="ANALYST_WALL_CLOCK"):
+        Settings(analyst_wall_clock_timeout_seconds=241).validate()
+    with pytest.raises(ValueError, match="must exceed"):
+        Settings(
+            analyst_wall_clock_timeout_seconds=240,
+            task_dispatch_deadline_seconds=240,
+        ).validate()
 
 
 def test_vertex_request_attaches_only_explicitly_authorized_gcs_images():

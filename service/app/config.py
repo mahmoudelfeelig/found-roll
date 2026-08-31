@@ -62,6 +62,7 @@ class Settings:
     inventory_mode: str = "fixture"
     inventory_base_url: str | None = None
     inventory_timeout_seconds: float = 3.0
+    analyst_wall_clock_timeout_seconds: float = 240.0
     inventory_allow_legacy_health_without_environment: bool = False
     relay_mode: str = "fixture"
     tasks_mode: str = "inline"
@@ -91,6 +92,7 @@ class Settings:
     task_queue: str = "found-roll"
     task_location: str = "us-central1"
     task_service_account: str | None = None
+    task_dispatch_deadline_seconds: int = 305
     secret_pepper: str = "found-roll-local-fixture-pepper"
     relay_shared_secret: str = "found-roll-local-relay-secret"
     allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS
@@ -107,6 +109,9 @@ class Settings:
             inventory_base_url=os.getenv("FOUND_ROLL_INVENTORY_BASE_URL") or None,
             inventory_timeout_seconds=float(
                 os.getenv("FOUND_ROLL_INVENTORY_TIMEOUT_SECONDS", "3.0")
+            ),
+            analyst_wall_clock_timeout_seconds=float(
+                os.getenv("FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS", "240")
             ),
             inventory_allow_legacy_health_without_environment=_truthy(
                 os.getenv("FOUND_ROLL_INVENTORY_ALLOW_LEGACY_HEALTH_WITHOUT_ENVIRONMENT"),
@@ -158,6 +163,9 @@ class Settings:
             task_queue=os.getenv("FOUND_ROLL_TASK_QUEUE", "found-roll").strip(),
             task_location=os.getenv("FOUND_ROLL_TASK_LOCATION", "us-central1").strip(),
             task_service_account=os.getenv("FOUND_ROLL_TASK_SERVICE_ACCOUNT") or None,
+            task_dispatch_deadline_seconds=int(
+                os.getenv("FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS", "305")
+            ),
             secret_pepper=os.getenv("FOUND_ROLL_SECRET_PEPPER", "found-roll-local-fixture-pepper"),
             relay_shared_secret=os.getenv("FOUND_ROLL_RELAY_SHARED_SECRET", "found-roll-local-relay-secret"),
             allowed_origins=tuple(
@@ -190,6 +198,18 @@ class Settings:
         if not 0.25 <= self.inventory_timeout_seconds <= 10.0:
             raise ValueError(
                 "FOUND_ROLL_INVENTORY_TIMEOUT_SECONDS must be between 0.25 and 10"
+            )
+        if not 30.0 <= self.analyst_wall_clock_timeout_seconds <= 240.0:
+            raise ValueError(
+                "FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS must be between 30 and 240"
+            )
+        if not 15 <= self.task_dispatch_deadline_seconds <= 1800:
+            raise ValueError(
+                "FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS must be between 15 and 1800"
+            )
+        if self.task_dispatch_deadline_seconds <= self.analyst_wall_clock_timeout_seconds:
+            raise ValueError(
+                "FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS must exceed the analyst wall-clock timeout"
             )
         if self.inventory_mode == "http" and not self.inventory_base_url:
             raise ValueError(
@@ -250,6 +270,14 @@ class Settings:
                 raise ValueError("FOUND_ROLL_RELAY_SHARED_SECRET must be replaced in production")
             if self.analyst_mode != "vertex_adk":
                 raise ValueError("production requires FOUND_ROLL_ANALYST_MODE=vertex_adk")
+            if self.analyst_wall_clock_timeout_seconds != 240.0:
+                raise ValueError(
+                    "production requires FOUND_ROLL_ANALYST_WALL_CLOCK_TIMEOUT_SECONDS=240"
+                )
+            if self.task_dispatch_deadline_seconds != 305:
+                raise ValueError(
+                    "production requires FOUND_ROLL_TASK_DISPATCH_DEADLINE_SECONDS=305"
+                )
             if self.inventory_mode != "http" or not self.inventory_base_url:
                 raise ValueError(
                     "production Vertex ADK requires FOUND_ROLL_INVENTORY_MODE=http and "

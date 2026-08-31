@@ -1159,6 +1159,8 @@ def test_cloud_tasks_replay_uses_a_distinct_oidc_task_with_the_same_opaque_scope
     assert replay["task_name"].rsplit("/", 1)[1].startswith("fr-replay-")
     original_request = publisher._client.created[0][1]["http_request"]
     replay_request = publisher._client.created[1][1]["http_request"]
+    assert publisher._client.created[0][1]["dispatch_deadline"] == {"seconds": 305}
+    assert publisher._client.created[1][1]["dispatch_deadline"] == {"seconds": 305}
     assert json.loads(replay_request["body"]) == json.loads(original_request["body"])
     assert replay_request["oidc_token"] == {
         "service_account_email": settings.task_service_account,

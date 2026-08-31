@@ -96,6 +96,9 @@ class CloudTasksPublisher:
         )
         request: dict[str, Any] = {
             "name": task_path,
+            "dispatch_deadline": {
+                "seconds": self._settings.task_dispatch_deadline_seconds,
+            },
             "http_request": {
                 "http_method": self._tasks.HttpMethod.POST,
                 "url": f"{self._settings.public_base_url}/tasks/outbox",

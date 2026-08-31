@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
@@ -11,6 +12,8 @@ from app.agent import VertexAdkCaseAnalyst
 from app.config import Settings
 from app.custody_service import ANALYSIS_EXECUTION_LEASE
 from app.domain import (
+    ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+    ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
     AgentExecutionEvidence,
     AgentToolOutcome,
     AnalysisProposal,
@@ -437,7 +440,7 @@ def test_stale_analysis_claim_fails_closed_without_second_analyst_call(client, a
         mode = "must-not-run"
         model_name = "must-not-run"
         prompt_version = "must-not-run"
-        output_schema_version = "found-roll-analysis-proposal-v1"
+        output_schema_version = "found-roll-analysis-proposal-v2"
 
         @staticmethod
         def analyze(_case, _candidates):
@@ -577,7 +580,7 @@ def test_analysis_call_ceiling_enters_manual_review_and_acks_terminal_redelivery
     }
 
     def exhaust_call_budget(_context):
-        raise LlmCallsLimitExceededError("Max number of llm calls limit of `12` exceeded")
+        raise LlmCallsLimitExceededError("Max number of llm calls limit of `6` exceeded")
 
     app.state.custody_service.analyst = VertexAdkCaseAnalyst(
         project="fixture-project",
@@ -604,6 +607,57 @@ def test_analysis_call_ceiling_enters_manual_review_and_acks_terminal_redelivery
     assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == event_count
 
 
+def test_analysis_wall_clock_timeout_terminalizes_after_execution_lease_expiry_before_redelivery(
+    client, app, case_id, monkeypatch
+):
+    service = app.state.custody_service
+    initial_now = datetime(2026, 8, 31, 18, 0, tzinfo=timezone.utc)
+    current_now = initial_now
+    service.clock = lambda: current_now
+    started = client.post(
+        f"/api/v1/passports/{case_id}/analysis-jobs",
+        json={"expected_version": 1, "idempotency_key": "analysis-wall-clock-timeout-001"},
+    )
+    assert started.status_code == 200, started.text
+    task = started.json()["task"]["payload"]
+    task_headers = {
+        "X-CloudTasks-TaskName": "projects/p/locations/l/queues/q/tasks/analysis-wall-clock"
+    }
+
+    async def cross_execution_lease_then_never_returns(**_kwargs):
+        nonlocal current_now
+        current_now += ANALYSIS_EXECUTION_LEASE + timedelta(seconds=1)
+        await asyncio.Event().wait()
+
+    service.analyst = VertexAdkCaseAnalyst(
+        project="fixture-project",
+        location="us-central1",
+        model_name="gemini-3.5-flash",
+        wall_clock_timeout_seconds=0.01,
+    )
+    monkeypatch.setattr(
+        service.analyst,
+        "_collect_adk_events",
+        cross_execution_lease_then_never_returns,
+    )
+
+    failed = client.post("/tasks/outbox", json=task, headers=task_headers)
+    assert failed.status_code == 503, failed.text
+    assert current_now == initial_now + ANALYSIS_EXECUTION_LEASE + timedelta(seconds=1)
+    snapshot = client.get(f"/api/v1/passports/{case_id}").json()
+    assert snapshot["case"]["state"] == "MANUAL_REVIEW"
+    assert snapshot["outbox"][-1]["status"] == "FAILED"
+    assert snapshot["outbox"][-1]["failure_stage"] == "EXECUTE"
+    assert snapshot["outbox"][-1]["failure_code"] == "analyst_unavailable"
+    assert snapshot["events"][-1]["type"] == "ANALYST_UNAVAILABLE"
+    event_count = len(snapshot["events"])
+
+    redelivery = client.post("/tasks/outbox", json=task, headers=task_headers)
+    assert redelivery.status_code == 200, redelivery.text
+    assert redelivery.json()["terminal_failure_acknowledged"] is True
+    assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == event_count
+
+
 def test_policy_invalid_analyst_output_enters_manual_review_and_acks_redelivery(client, app, case_id):
     started = client.post(
         f"/api/v1/passports/{case_id}/analysis-jobs",
@@ -616,11 +670,12 @@ def test_policy_invalid_analyst_output_enters_manual_review_and_acks_redelivery(
         mode = "test-policy-invalid"
         model_name = "test-policy-invalid"
         prompt_version = "test-policy-invalid"
-        output_schema_version = "found-roll-analysis-proposal-v1"
+        output_schema_version = "found-roll-analysis-proposal-v2"
 
         @staticmethod
         def analyze(_case, _candidates):
             return "policy-invalid-run", AnalysisProposal(
+                decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
                 ranked_candidate_ids=["candidate-outside-authorized-set"],
                 selected_candidate_id="candidate-outside-authorized-set",
                 visible_signals=["untrusted signal"],
@@ -649,6 +704,135 @@ def test_policy_invalid_analyst_output_enters_manual_review_and_acks_redelivery(
     assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == event_count
 
 
+def test_custody_rejects_an_analyst_that_reorders_the_deterministic_candidate_packet(
+    client, app, case_id
+):
+    started = client.post(
+        f"/api/v1/passports/{case_id}/analysis-jobs",
+        json={"expected_version": 1, "idempotency_key": "analysis-packet-reorder-001"},
+    )
+    assert started.status_code == 200, started.text
+
+    class ReorderingAnalyst:
+        mode = "test-reordering"
+        model_name = "test-reordering"
+        prompt_version = "test-reordering"
+        output_schema_version = "found-roll-analysis-proposal-v2"
+
+        @staticmethod
+        def analyze(_case, _candidates):
+            return "reordered-packet-run", AnalysisProposal(
+                decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
+                ranked_candidate_ids=["ML-PCH-219", "NA-PCH-231"],
+                selected_candidate_id="ML-PCH-219",
+                visible_signals=["black nylon pouch"],
+                evidence_sufficient_for_claim=False,
+                restricted_attribute_id="lens_serial_last4",
+                next_question="Which four characters are printed on the lens serial label?",
+                tool_trajectory=["untrusted-model-reported-value"],
+            )
+
+    app.state.custody_service.analyst = ReorderingAnalyst()
+    failed = client.post("/tasks/outbox", json=started.json()["task"]["payload"])
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["error"]["code"] == "agent_candidate_packet_drift"
+    snapshot = client.get(f"/api/v1/passports/{case_id}").json()
+    assert snapshot["case"]["state"] == "MANUAL_REVIEW"
+    assert snapshot["case"]["selected_item_id"] is None
+    assert snapshot["outbox"][-1]["status"] == "FAILED"
+    assert snapshot["events"][-1]["type"] == "ANALYST_REVIEW_REQUIRED"
+
+
+def test_agent_abstention_completes_the_outbox_without_a_private_question_or_second_model_call(
+    client, app, case_id, monkeypatch
+):
+    started = client.post(
+        f"/api/v1/passports/{case_id}/analysis-jobs",
+        json={"expected_version": 1, "idempotency_key": "analysis-agent-abstention-001"},
+    )
+    assert started.status_code == 200, started.text
+    task = started.json()["task"]["payload"]
+    analyst_calls = 0
+
+    class AbstainingAnalyst:
+        mode = "vertex_adk"
+        model_name = "gemini-3.5-flash"
+        prompt_version = "found-roll-case-analyst-prompt-v3"
+        output_schema_version = "found-roll-analysis-proposal-v2"
+
+        @staticmethod
+        def analyze(_case, _candidates):
+            nonlocal analyst_calls
+            analyst_calls += 1
+            return (
+                "adk-run-abstention-fixture",
+                AnalysisProposal(
+                    decision=ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+                    ranked_candidate_ids=["NA-PCH-231", "ML-PCH-219"],
+                    selected_candidate_id=None,
+                    visible_signals=[],
+                    evidence_sufficient_for_claim=False,
+                    restricted_attribute_id=None,
+                    next_question=None,
+                    manual_review_reason="visible_signal_conflict",
+                    tool_trajectory=["untrusted-model-reported-value"],
+                ),
+                AgentExecutionEvidence(
+                    trace_id="adk-invocation-abstention-fixture",
+                    invocation_count=2,
+                    tool_trajectory=[
+                        AgentToolOutcome(name="search_custodian", outcome="success"),
+                        AgentToolOutcome(name="search_custodian", outcome="success"),
+                        AgentToolOutcome(name="load_candidate", outcome="success"),
+                        AgentToolOutcome(name="request_manual_review", outcome="abstained"),
+                    ],
+                    typed_output_valid=True,
+                ),
+            )
+
+    service = app.state.custody_service
+    service.analyst = AbstainingAnalyst()
+    fixed_now = datetime(2026, 8, 31, 20, 0, tzinfo=timezone.utc)
+    service.clock = lambda: fixed_now
+    original_mark_outbox_execution = service.repository.mark_outbox_execution
+    completion_write_failed = False
+
+    def fail_first_completion_write(outbox_id, status, **kwargs):
+        nonlocal completion_write_failed
+        if status == OutboxStatus.COMPLETE and not completion_write_failed:
+            completion_write_failed = True
+            raise RuntimeError("synthetic abstention completion-write crash")
+        return original_mark_outbox_execution(outbox_id, status, **kwargs)
+
+    monkeypatch.setattr(service.repository, "mark_outbox_execution", fail_first_completion_write)
+    interrupted = client.post("/tasks/outbox", json=task)
+    assert interrupted.status_code == 500, interrupted.text
+    partial = client.get(f"/api/v1/passports/{case_id}").json()
+    assert partial["case"]["state"] == "MANUAL_REVIEW"
+    assert partial["case"]["selected_item_id"] is None
+    assert partial["case"]["next_question"] is None
+    assert partial["outbox"][-1]["status"] == "DISPATCHED"
+    assert partial["events"][-1]["type"] == "ANALYST_ABSTAINED"
+    assert "CANDIDATE_PACKET_PROPOSED" not in {event["type"] for event in partial["events"]}
+    assert "PRIVATE_EVIDENCE_REQUESTED" not in {event["type"] for event in partial["events"]}
+    event_count = len(partial["events"])
+
+    fixed_now += timedelta(seconds=10)
+    monkeypatch.setattr(service.repository, "mark_outbox_execution", original_mark_outbox_execution)
+    recovered = client.post("/tasks/outbox", json=task)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["agent_abstained"] is True
+    assert recovered.json()["manual_action_required"] is True
+    assert recovered.json()["outbox"]["status"] == "COMPLETE"
+    assert analyst_calls == 1
+    assert len(client.get(f"/api/v1/passports/{case_id}/events").json()["items"]) == event_count
+
+    replay = client.post("/tasks/outbox", json=task)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+    assert analyst_calls == 1
+
+
 def test_pre_model_candidate_conflict_uses_truthful_manual_review_narrative(client, app, case_id):
     started = client.post(
         f"/api/v1/passports/{case_id}/analysis-jobs",
@@ -660,7 +844,7 @@ def test_pre_model_candidate_conflict_uses_truthful_manual_review_narrative(clie
         mode = "deterministic-pre-model"
         model_name = "not-called"
         prompt_version = "deterministic-pre-model"
-        output_schema_version = "found-roll-analysis-proposal-v1"
+        output_schema_version = "found-roll-analysis-proposal-v2"
 
         @staticmethod
         def analyze(_case, _candidates):
@@ -695,7 +879,7 @@ def test_analysis_failure_recovers_after_manual_review_outbox_write_crash(
         mode = "test-unavailable"
         model_name = "test-unavailable"
         prompt_version = "test-unavailable"
-        output_schema_version = "found-roll-analysis-proposal-v1"
+        output_schema_version = "found-roll-analysis-proposal-v2"
 
         @staticmethod
         def analyze(_case, _candidates):

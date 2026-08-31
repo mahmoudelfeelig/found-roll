@@ -3,6 +3,7 @@
   "health": {
     "admin_reset_auth_required": false,
     "analyst_mode": "fixture",
+    "analyst_wall_clock_timeout_seconds": 240.0,
     "demo_mode": true,
     "demo_mutation_auth_required": false,
     "environment": "development",
@@ -16,7 +17,7 @@
     "inventory_mode": "fixture",
     "inventory_timeout_seconds": 3.0,
     "model_name": "deterministic-fixture-no-model",
-    "output_schema_version": "found-roll-analysis-proposal-v1",
+    "output_schema_version": "found-roll-analysis-proposal-v2",
     "policy_version": "found-roll-release-v1",
     "prompt_version": "fixture-no-model",
     "relay_mode": "fixture",
@@ -25,6 +26,7 @@
     "simulator_disclosed": true,
     "staff_read_auth_required": false,
     "status": "ok",
+    "task_dispatch_deadline_seconds": 305,
     "task_header_required": false,
     "task_oidc_required": false,
     "tasks_mode": "inline"
@@ -37,8 +39,8 @@
       "evt-68ed48f3938157bda3577f5a",
       "evt-5f5ae464793650f7a6615176",
       "evt-6002c2b43eb750aeb9c44eff",
-      "evt-a34c1bab686c54f1bd2725b8",
-      "evt-1634b9c6d1ac57aea65cb1de",
+      "evt-ccf32c20523f50d689399509",
+      "evt-2bf6ffe8f5835259a4b2abca",
       "evt-f29e2d7f8efb50b6b7ae38df",
       "evt-135b92bb69bf550f8f55c3dd",
       "evt-2c6072a0611e5163a6417615",
@@ -46,12 +48,12 @@
       "evt-3a4e4d9769d352a693bd2132",
       "evt-6d29601f62ee507c99282fcc",
       "evt-60e21c8eb6fa57a4b9f92faf",
-      "evt-b778982d23425523a96d0e6d",
+      "evt-1aa1c4f5eb7250d5970ca06e",
       "evt-4b56a2f789a05393b9ce4e6d",
       "evt-689d4080b0595213b9aea505",
       "evt-155eab92dc185150b1610588",
       "evt-94c890cc718e5311838cb0d2",
-      "evt-622f2d832b295fce8a547204",
+      "evt-e08ba39c3f285667998511a8",
       "evt-9c83ba04544e5f41a71b8036"
     ],
     "evidence_digests": [
@@ -62,12 +64,12 @@
       "3ff0717277a2c6737313cc51738a718e5a3f0879ec5624c2684fc9d8b32a1829",
       "ef452fa92d43ad80b4e9f1bc2754260abe6cdbfa83e188b2a6faa1de49988fa6"
     ],
-    "final_event_hash": "df4c613c765eaf3fdd3b4257a93ae81236ddb7c19e621efb6824d5ebd72005a8",
+    "final_event_hash": "6df76a3ccad8159080c4ee0f25621ff8922aab17457ecdc5148dbae1e60c71c8",
     "final_state": "CLOSED",
     "final_version": 19,
-    "first_event_hash": "0a512f5c352ac25f20627228d59a158601dc15bbef7a3549842ef7b0cdc5787a",
+    "first_event_hash": "4feef280b63dd3b2de3d63e84c17dd22e4a718fd4ef27093ab8d22d3b65f8e09",
     "internally_consistent": true,
-    "manifest_id": "manifest-6f2dc0d40c07e424d996a4b7",
+    "manifest_id": "manifest-4b786738ce9251680276d464",
     "physical_transfer_proven": false,
     "schema_version": "1"
   }

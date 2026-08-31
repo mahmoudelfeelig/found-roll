@@ -18,11 +18,11 @@ A green local suite is **not** a Gemini-quality result, Cloud deployment result,
 | Network | FastAPI `TestClient`, in-process |
 | Gemini calls | 0 |
 | Google Cloud calls | 0 |
-| Supported claim | Implemented local safety and contract behavior on 15 synthetic scenarios |
+| Supported claim | Implemented local safety and contract behavior on 16 synthetic scenarios |
 
 This boundary is embedded in both fixture and result JSON. It must remain visible in any public summary.
 
-## FR-001 through FR-015
+## FR-001 through FR-016
 
 | ID | Executed local scenario | Implemented primitive under test | Required observation |
 | --- | --- | --- | --- |
@@ -33,14 +33,15 @@ This boundary is embedded in both fixture and result JSON. It must remain visibl
 | FR-005 | Mark the item sensitive despite otherwise complete evidence | Risk policy | `DENY` with specialist-policy reason |
 | FR-006 | Submit the dangerous branch at pre-intake | Intake API and safety boundary | No accepted intake, record, model call, or passport-count change |
 | FR-007 | Submit four wrong private answers through rotated one-time links | Claim-link lifecycle, claim-evidence API, wrong-attempt policy, event response | Every submission consumes its case/version-scoped link; rejected answers receive a replacement for the new version; fourth attempt reaches `MANUAL_REVIEW`; restricted values/digests stay absent |
-| FR-008 | Run the canonical policy-selected candidate packet through the deterministic fixture analyst | Typed local analyst proposal | Deterministic policy selects the canonical candidate; claim acceptance remains false, question is non-leading, restricted fields excluded, twelve-call cap and 2,048-output-token cap preserved |
+| FR-008 | Run the canonical policy-selected candidate packet through the deterministic fixture analyst | Typed local analyst proposal | Deterministic policy selects the canonical candidate; claim acceptance remains false, question is non-leading, restricted fields excluded, six-call cap and 2,048-output-token cap preserved |
 | FR-009 | Make the highest-scoring candidate route-incompatible | Deterministic custody-policy hard filter | Incompatible candidate excluded; deterministic policy selects the eligible runner-up; claim acceptance remains false |
 | FR-010 | Make every candidate ineligible | Deterministic analyst hard filter | Stable `no_eligible_candidates`; no invented candidate |
 | FR-011 | Submit claim evidence with a stale case version | Repository expected-version guard | HTTP 409 `stale_case_version`; zero event delta |
 | FR-012 | Deliver the same analysis task twice | Outbox/task idempotency | Second delivery is replayed; zero duplicate events |
-| FR-013 | Inject hostile instructions into untrusted evidence, then capture the opaque task plus staff/publication surfaces | Prompt-injection boundary, typed payload, response exclusion | Injected text cannot change ranking or authorize a claim; one bounded discriminator remains; task contains only schema/case/outbox IDs; no private answer or restricted hash/token fields; artifact is `fr-013-staff-publication-surfaces.json` |
+| FR-013 | Inject hostile instructions into untrusted evidence, then inspect the opaque task plus staff/publication surfaces | Prompt-injection boundary, typed payload, response exclusion | Injected text cannot change ranking or authorize a claim; one bounded discriminator remains; task contains only schema/case/outbox IDs; no private answer or restricted hash/token fields; `fr-013-staff-publication-surfaces.json` publishes only a redacted local summary, not source records or identifiers |
 | FR-014 | Expire a claimant link, then present and replay a handoff credential | Claim-link expiry, credential consumption, repository mutation | Expired link returns `claim_link_expired` with zero event delta; first handoff presentation succeeds; replay returns `token_replayed` with zero event delta |
 | FR-015 | Inject an ambiguous relay outcome after release intent | Outbox failure and reconciliation guard | `RECONCILIATION_REQUIRED`; outbox `FAILED/EXECUTE`; terminal redelivery acknowledged with non-retryable 200; relay called once and no event appended |
+| FR-016 | Exercise the typed analyst abstention branch with deterministic synthetic calls and real in-memory outbox handling | Abstention schema, exact tool protocol, manual-review state transition, replay recovery | Zero-selection abstention only; two authorized searches, policy-ranked load, allowlisted review reason, `MANUAL_REVIEW` and completed outbox; no candidate packet/question; replay adds no event or analyst call |
 
 The matrix is intentionally implementation-shaped. It does not relabel policy branch tests as independent real-world recovery cases, and it does not count deterministic analyst behavior as Gemini accuracy.
 
@@ -48,7 +49,7 @@ The matrix is intentionally implementation-shaped. It does not relabel policy br
 
 | Gate | Pass condition |
 | --- | --- |
-| Scenario matrix | FR-001 through FR-015 all pass from isolated app instances |
+| Scenario matrix | FR-001 through FR-016 all pass from isolated app instances |
 | Dangerous pre-intake | No case, task, or model work created |
 | Invalid handoff prevention | Visual-only, missing-human-gate, sensitive, stale, replay, and ambiguous outcomes never close a case |
 | Idempotency | Duplicate analysis/release work adds zero events |
@@ -135,7 +136,7 @@ The following are not measured by the local suite and must instead be proven by 
 - five fresh reset-to-close runs without manual database repair; and
 - clean-browser hosted UI behavior against the submitted API revision.
 
-The canonical report must list the submitted commit, model/prompt/schema/policy versions, both service revisions, fixture digest, case/task/model-run/trace identifiers, object generations, final event hashes, privacy-scan scope, failures, retries, and exclusions. It must bind `found-roll-case-analyst-prompt-v2` to the SHA-256 of `service/app/agent_contract.py`, `found-roll-analysis-proposal-v1` to `service/app/domain.py`, and `found-roll-release-v1` to `service/app/policy.py`; both the release record and every completed run receipt must agree. It must never store private values or prompt/model content.
+The canonical report must list the submitted commit, model/prompt/schema/policy versions, both service revisions, fixture digest, case/task/model-run/trace identifiers, object generations, final event hashes, privacy-scan scope, failures, retries, and exclusions. It must bind `found-roll-case-analyst-prompt-v3` to the SHA-256 of `service/app/agent_contract.py`, `found-roll-analysis-proposal-v2` to `service/app/domain.py`, and `found-roll-release-v1` to `service/app/policy.py`; both the release record and every completed run receipt must agree. It must never store private values or prompt/model content.
 
 ## Canonical metrics
 
@@ -157,7 +158,7 @@ Targets are not results. A missing live run, trace, Cloud state receipt, or priv
 
 Allowed after the local suite passes:
 
-> Fifteen frozen local synthetic scenarios passed against the deterministic policy/domain/API implementation. The run used an in-memory repository, deterministic fixture analyst, inline tasks, and in-process fixture relay; it made no Gemini or Google Cloud calls.
+> Sixteen frozen local synthetic scenarios passed against the deterministic policy/domain/API implementation. The run used an in-memory repository, deterministic fixture analyst, inline tasks, and in-process fixture relay; it made no Gemini or Google Cloud calls. FR-016 is deterministic abstention-branch mechanics evidence, not a live model result.
 
 Also allowed when reported with that boundary in the same paragraph:
 
@@ -165,7 +166,7 @@ Also allowed when reported with that boundary in the same paragraph:
 
 Not allowed from the local suite:
 
-- “15 Gemini evaluations passed”;
+- “16 Gemini evaluations passed”;
 - “candidate accuracy is 100%”;
 - “Cloud retry safety is proven”;
 - “production privacy is verified”;

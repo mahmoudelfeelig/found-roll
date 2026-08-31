@@ -21,6 +21,8 @@ from .agent_contract import (
 )
 from .domain import (
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
+    ANALYSIS_DECISION_ABSTAIN_TO_MANUAL_REVIEW,
+    ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
     AgentExecutionEvidence,
     AgentToolOutcome,
     AnalysisProposal,
@@ -28,6 +30,8 @@ from .domain import (
     CaseRecord,
     EvidenceOrigin,
     EvidenceVisibility,
+    MANUAL_REVIEW_REASON_EVIDENCE_INCONCLUSIVE,
+    MANUAL_REVIEW_REASON_VISIBLE_SIGNAL_CONFLICT,
     MAX_LLM_INVOCATIONS,
 )
 from .errors import Conflict, Unavailable
@@ -66,7 +70,11 @@ def deterministic_candidate_packet(case: CaseRecord, candidates: list[Candidate]
     ]
     if not eligible:
         raise Conflict("no_eligible_candidates", "No candidate survived the deterministic hard filters.")
-    ranked = sorted(eligible, key=lambda item: item.frozen_score, reverse=True)
+    # The typed model contract can carry at most five candidate IDs. The custody
+    # engine therefore publishes a deterministic top-five packet, rather than
+    # allowing an oversized inventory response to make the bounded workflow
+    # fail or to shift the candidate set at the model boundary.
+    ranked = sorted(eligible, key=lambda item: item.frozen_score, reverse=True)[:5]
     selected = ranked[0]
     runner_up = ranked[1].frozen_score if len(ranked) > 1 else 0.0
     if (
@@ -100,6 +108,7 @@ class FixtureCaseAnalyst:
         # represented as a successful analyst search.
         authorized_tenants = sorted({item.tenant_id for item in ranked})
         proposal = AnalysisProposal(
+            decision=ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR,
             ranked_candidate_ids=[item.id for item in ranked],
             selected_candidate_id=selected.id,
             visible_signals=selected.public_signals,
@@ -209,10 +218,32 @@ def _observed_execution_evidence(
             "agent_invocation_evidence_invalid",
             "The live analyst did not expose a bounded invocation count.",
         )
-    if not 4 <= len(trajectory) <= 12:
+    authorized_tenants = sorted({item.tenant_id for item in ranked_candidates})
+    request_private_discriminator = (
+        proposal.decision == ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR
+    )
+    expected_tool_names = [
+        *("search_custodian" for _ in authorized_tenants),
+        "load_candidate",
+        *(
+            ["submit_observations", "propose_discriminator"]
+            if request_private_discriminator
+            else ["request_manual_review"]
+        ),
+    ]
+    expected_outcomes = [
+        *("success" for _ in authorized_tenants),
+        "success",
+        *( ["success", "success"] if request_private_discriminator else ["abstained"] ),
+    ]
+    if (
+        len(trajectory) != len(expected_tool_names)
+        or [entry.name for entry in trajectory] != expected_tool_names
+        or [entry.outcome for entry in trajectory] != expected_outcomes
+    ):
         raise Conflict(
             "agent_tool_trajectory_invalid",
-            "The live analyst did not expose a bounded tool trajectory.",
+            "The live analyst did not complete the exact bounded successful tool trajectory.",
         )
     if response_ids != set(calls_by_id):
         raise Conflict(
@@ -220,35 +251,54 @@ def _observed_execution_evidence(
             "The live analyst did not return exactly one ADK response for every observed tool call.",
         )
 
-    required_tools = {
-        "search_custodian",
-        "load_candidate",
-        "submit_observations",
-        "propose_discriminator",
-    }
-    successful_names = {name for name, _ in successful_calls}
-    if not required_tools.issubset(successful_names):
+    searched_tenants = [
+        str(args.get("tenant_id"))
+        for name, args in successful_calls
+        if name == "search_custodian" and args.get("tenant_id")
+    ]
+    if searched_tenants != authorized_tenants:
         raise Conflict(
-            "agent_tool_trajectory_incomplete",
-            "The live analyst skipped or failed a required bounded tool.",
+            "agent_custodian_search_trajectory_invalid",
+            "The live analyst did not search each authorized custodian exactly once in order.",
+        )
+    policy_ranked_candidate = ranked_candidates[0]
+    if not any(
+        name == "load_candidate" and args.get("candidate_id") == policy_ranked_candidate.id
+        for name, args in successful_calls
+    ):
+        raise Conflict(
+            "agent_selected_tool_binding_invalid",
+            "The live analyst did not load the policy-ranked candidate through its authorized tool.",
+        )
+    if not request_private_discriminator:
+        manual_review_call = next(
+            (
+                args
+                for name, args in calls_by_id.values()
+                if name == "request_manual_review"
+            ),
+            None,
+        )
+        if manual_review_call is None or manual_review_call.get("reason_code") != proposal.manual_review_reason:
+            raise Conflict(
+                "agent_manual_review_binding_invalid",
+                "The live analyst abstention did not bind its allowlisted manual-review reason.",
+            )
+        return AgentExecutionEvidence(
+            trace_id=next(iter(trace_ids)),
+            invocation_count=invocation_count,
+            tool_trajectory=trajectory,
+            typed_output_valid=True,
         )
 
     selected_id = proposal.selected_candidate_id
     selected = next((item for item in ranked_candidates if item.id == selected_id), None)
-    searched_tenants = {
-        str(args.get("tenant_id"))
-        for name, args in successful_calls
-        if name == "search_custodian" and args.get("tenant_id")
-    }
-    authorized_tenants = {item.tenant_id for item in ranked_candidates}
-    if searched_tenants != authorized_tenants:
+    if selected is None or selected.id != policy_ranked_candidate.id:
         raise Conflict(
-            "agent_custodian_search_incomplete",
-            "The live analyst did not search every authorized custodian boundary.",
+            "agent_selection_missing",
+            "The analyst did not retain the policy-ranked candidate for the private-question path.",
         )
-    if selected is None:
-        raise Conflict("agent_selection_missing", "The analyst did not select a candidate.")
-    for required_name in ("load_candidate", "submit_observations", "propose_discriminator"):
+    for required_name in ("submit_observations", "propose_discriminator"):
         if not any(
             name == required_name and args.get("candidate_id") == selected.id
             for name, args in successful_calls
@@ -299,6 +349,7 @@ class VertexAdkCaseAnalyst:
         project: str | None,
         location: str,
         model_name: str,
+        wall_clock_timeout_seconds: float = 240.0,
         evidence_store: "EvidenceStore | None" = None,
         inventory_gateway: InventoryGateway | None = None,
     ) -> None:
@@ -307,6 +358,9 @@ class VertexAdkCaseAnalyst:
         self.project = project
         self.location = location
         self.model_name = model_name
+        if wall_clock_timeout_seconds <= 0:
+            raise ValueError("wall_clock_timeout_seconds must be positive")
+        self.wall_clock_timeout_seconds = wall_clock_timeout_seconds
         self.evidence_store = evidence_store
         self.inventory_gateway = inventory_gateway or FixtureInventoryGateway()
 
@@ -400,8 +454,15 @@ class VertexAdkCaseAnalyst:
                 "expected_answer_included": False,
             }
 
+        allowed_manual_review_reasons = {
+            MANUAL_REVIEW_REASON_EVIDENCE_INCONCLUSIVE,
+            MANUAL_REVIEW_REASON_VISIBLE_SIGNAL_CONFLICT,
+        }
+
         def request_manual_review(reason_code: str) -> dict:
             """Record a bounded review proposal; this tool cannot approve or release anything."""
+            if reason_code not in allowed_manual_review_reasons:
+                return {"review_requested": False, "reason": "review_reason_not_authorized"}
             return {"review_requested": True, "reason_code": reason_code, "approved": False}
 
         model = Gemini(
@@ -449,6 +510,45 @@ class VertexAdkCaseAnalyst:
             )
         return selected
 
+    async def _collect_adk_events(
+        self,
+        *,
+        case: CaseRecord,
+        ranked_candidates: list[Candidate],
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        Content,
+        Part,
+        RunConfig,
+        Runner,
+        InMemorySessionService,
+    ) -> tuple[str, list[object]]:
+        final_text = ""
+        observed_events: list[object] = []
+        session_service = InMemorySessionService()
+        await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
+        runner = Runner(
+            agent=self._build_agent(ranked_candidates),
+            app_name=app_name,
+            session_service=session_service,
+        )
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=Content(
+                role="user",
+                parts=self._request_parts(case, ranked_candidates, Part),
+            ),
+            run_config=RunConfig(max_llm_calls=self.max_llm_calls),
+        ):
+            observed_events.append(event)
+            if event.is_final_response() and event.content:
+                final_text = "".join(
+                    part.text or "" for part in event.content.parts if getattr(part, "text", None)
+                )
+        return final_text, observed_events
+
     async def _analyze_async(
         self, case: CaseRecord, candidates: list[Candidate]
     ) -> tuple[str, AnalysisProposal, AgentExecutionEvidence]:
@@ -470,30 +570,25 @@ class VertexAdkCaseAnalyst:
         app_name = "found_roll_case_analyst"
         user_id = f"case:{case.id}"
         session_id = run_id
-        final_text = ""
-        observed_events: list[object] = []
         try:
-            session_service = InMemorySessionService()
-            await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
-            runner = Runner(
-                agent=self._build_agent(ranked_candidates),
-                app_name=app_name,
-                session_service=session_service,
-            )
-            async for event in runner.run_async(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=Content(
-                    role="user",
-                    parts=self._request_parts(case, ranked_candidates, Part),
-                ),
-                run_config=RunConfig(max_llm_calls=self.max_llm_calls),
-            ):
-                observed_events.append(event)
-                if event.is_final_response() and event.content:
-                    final_text = "".join(
-                        part.text or "" for part in event.content.parts if getattr(part, "text", None)
-                    )
+            async with asyncio.timeout(self.wall_clock_timeout_seconds):
+                final_text, observed_events = await self._collect_adk_events(
+                    case=case,
+                    ranked_candidates=ranked_candidates,
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id,
+                    Content=Content,
+                    Part=Part,
+                    RunConfig=RunConfig,
+                    Runner=Runner,
+                    InMemorySessionService=InMemorySessionService,
+                )
+        except TimeoutError as exc:
+            raise Unavailable(
+                "adk_wall_clock_timeout",
+                "The live Case Analyst reached its bounded wall-clock limit and stopped for manual review.",
+            ) from exc
         except LlmCallsLimitExceededError as exc:
             raise Unavailable(
                 "adk_llm_call_limit_exceeded",
@@ -518,17 +613,17 @@ class VertexAdkCaseAnalyst:
             raise Conflict("agent_scope_violation", "The analyst referenced an unauthorized candidate.")
         if proposal.selected_candidate_id and proposal.selected_candidate_id not in authorized_ids:
             raise Conflict("agent_scope_violation", "The analyst selected an unauthorized candidate.")
-        if (
-            len(proposal.ranked_candidate_ids) != len(authorized_ids)
-            or set(proposal.ranked_candidate_ids) != authorized_ids
-            or proposal.selected_candidate_id != ranked_candidates[0].id
-            or proposal.ranked_candidate_ids[0] != proposal.selected_candidate_id
-        ):
+        if proposal.ranked_candidate_ids != [candidate.id for candidate in ranked_candidates]:
             raise Conflict(
                 "agent_candidate_packet_invalid",
-                "The analyst proposal did not preserve the custody engine's eligible candidate packet and selected winner.",
+                "The analyst proposal did not preserve the custody engine's eligible candidate packet and order.",
             )
-        if proposal.selected_candidate_id:
+        if proposal.decision == ANALYSIS_DECISION_REQUEST_PRIVATE_DISCRIMINATOR:
+            if proposal.selected_candidate_id != ranked_candidates[0].id:
+                raise Conflict(
+                    "agent_candidate_packet_invalid",
+                    "The analyst private-question path did not retain the policy-ranked candidate.",
+                )
             # Re-read the selected candidate through the configured live boundary.
             # This prevents a model from succeeding after skipped or failed tools.
             self._validate_selected_inventory(
@@ -543,6 +638,11 @@ class VertexAdkCaseAnalyst:
                     "agent_discriminator_invalid",
                     "The analyst proposed a discriminator outside the selected candidate's allowed private fact.",
                 )
+        elif proposal.selected_candidate_id is not None:
+            raise Conflict(
+                "agent_candidate_packet_invalid",
+                "The analyst abstention path cannot select a candidate.",
+            )
         execution = _observed_execution_evidence(
             events=observed_events,
             ranked_candidates=ranked_candidates,
