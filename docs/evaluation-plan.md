@@ -135,7 +135,7 @@ The following remain unmeasured until a deployed run produces receipts:
 - five fresh reset-to-close runs without manual database repair; and
 - clean-browser hosted UI behavior against the submitted API revision.
 
-The canonical report must list the submitted commit, model/prompt/schema/policy versions, both service revisions, fixture digest, case/task/model-run/trace identifiers, object generations, final event hashes, privacy-scan scope, failures, retries, and exclusions. It must bind `found-roll-case-analyst-prompt-v1` to the SHA-256 of `service/app/agent_contract.py`, `found-roll-analysis-proposal-v1` to `service/app/domain.py`, and `found-roll-release-v1` to `service/app/policy.py`; both the release record and every completed run receipt must agree. It must never store private values or prompt/model content.
+The canonical report must list the submitted commit, model/prompt/schema/policy versions, both service revisions, fixture digest, case/task/model-run/trace identifiers, object generations, final event hashes, privacy-scan scope, failures, retries, and exclusions. It must bind `found-roll-case-analyst-prompt-v2` to the SHA-256 of `service/app/agent_contract.py`, `found-roll-analysis-proposal-v1` to `service/app/domain.py`, and `found-roll-release-v1` to `service/app/policy.py`; both the release record and every completed run receipt must agree. It must never store private values or prompt/model content.
 
 ## Canonical metrics
 

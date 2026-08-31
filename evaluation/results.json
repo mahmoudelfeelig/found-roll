@@ -11,7 +11,7 @@
   },
   "failed_count": 0,
   "fixture_count": 15,
-  "generated_at": "2026-08-31T02:36:07.744184+00:00",
+  "generated_at": "2026-08-31T03:25:41.075756+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",
@@ -199,7 +199,7 @@
           "output_schema": "AnalysisProposal",
           "output_schema_version": "found-roll-analysis-proposal-v1",
           "policy_version": "found-roll-release-v1",
-          "prompt_version": "found-roll-case-analyst-prompt-v1",
+          "prompt_version": "found-roll-case-analyst-prompt-v2",
           "tool_names": [
             "search_custodian",
             "load_candidate",

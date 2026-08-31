@@ -169,7 +169,7 @@
   },
   "frozen_contracts": {
     "prompt": {
-      "version": "found-roll-case-analyst-prompt-v1",
+      "version": "found-roll-case-analyst-prompt-v2",
       "source_path": "service/app/agent_contract.py",
       "source_sha256": "<agent-contract-source-sha256>"
     },

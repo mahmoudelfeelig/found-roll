@@ -21,7 +21,7 @@
   "app_revision": "<app-cloud-run-revision>",
   "simulator_revision": "<simulator-cloud-run-revision>",
   "model_name": "gemini-3.5-flash",
-  "prompt_version": "found-roll-case-analyst-prompt-v1",
+  "prompt_version": "found-roll-case-analyst-prompt-v2",
   "output_schema_version": "found-roll-analysis-proposal-v1",
   "policy_version": "found-roll-release-v1",
   "production": {

@@ -20,7 +20,11 @@ from app.agent import (
     _tool_outcome,
     deterministic_candidate_packet,
 )
-from app.agent_contract import CASE_ANALYST_INSTRUCTION, CASE_ANALYST_PROMPT_VERSION
+from app.agent_contract import (
+    CASE_ANALYST_INSTRUCTION,
+    CASE_ANALYST_PROMPT_VERSION,
+    build_case_analyst_request,
+)
 from app.domain import (
     ANALYSIS_PROPOSAL_SCHEMA_VERSION,
     AgentExecutionEvidence,
@@ -58,6 +62,14 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     assert analyst.max_llm_calls == 12
     assert analyst.prompt_version == CASE_ANALYST_PROMPT_VERSION
     assert analyst.output_schema_version == ANALYSIS_PROPOSAL_SCHEMA_VERSION
+    assert CASE_ANALYST_PROMPT_VERSION == "found-roll-case-analyst-prompt-v2"
+    assert "Preserve that list exactly, keep its order" in agent.instruction
+    assert "search_custodian exactly once for every authorized_tenants entry" in agent.instruction
+    assert "without repeating a successful call" in agent.instruction
+    ranked = deterministic_candidate_packet(fixture_case(), fixture_candidates("test-pepper"))
+    request = build_case_analyst_request(fixture_case(), ranked)
+    assert request["candidate_ids"] == ["NA-PCH-231", "ML-PCH-219"]
+    assert request["authorized_tenants"] == ["metro-loop", "northport-air"]
     tools = {tool.__name__: tool for tool in agent.tools}
     loaded = tools["load_candidate"]("NA-PCH-231")
     assert loaded["allowed_discriminator_id"] == "lens_serial_last4"

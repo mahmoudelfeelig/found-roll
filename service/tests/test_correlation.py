@@ -7,7 +7,8 @@ import re
 
 from fastapi.testclient import TestClient
 
-from app.correlation import CORRELATION_HEADER
+from app.correlation import CORRELATION_HEADER, safe_analysis_error_code
+from app.errors import Conflict
 from app.main import create_app
 
 
@@ -76,8 +77,10 @@ def test_service_returns_and_safely_logs_bounded_correlation(caplog):
         "http_method",
         "route_template",
         "status_code",
+        "error_code",
         "latency_ms",
     }
+    assert structured["error_code"] is None
     assert private_answer not in safe_handler.format(record)
     assert logging.getLogger("uvicorn.access").disabled is True
     assert "--no-access-log" in (
@@ -111,3 +114,52 @@ def test_invalid_correlation_is_replaced_and_health_reports_inventory_config(cap
     assert response.json()["inventory_gateway_configured"] is True
     assert response.json()["inventory_gateway_ready"] is True
     assert response.json()["inventory_timeout_seconds"] == 3.0
+
+
+def test_only_allowlisted_analysis_code_enters_request_log(caplog):
+    private_message = "private-model-output-marker-5531"
+    application = create_app()
+
+    class FailedAnalyst:
+        mode = "test-failed-analyst"
+        model_name = "test-failed-analyst"
+        prompt_version = "test-failed-analyst"
+        output_schema_version = "found-roll-analysis-proposal-v1"
+
+        @staticmethod
+        def analyze(_case, _candidates):
+            raise Conflict("agent_tool_trajectory_incomplete", private_message)
+
+    request_logger = logging.getLogger("found_roll.http")
+    request_logger.propagate = True
+    try:
+        with caplog.at_level(logging.INFO, logger="found_roll.http"):
+            with TestClient(application) as client:
+                started = client.post(
+                    "/api/v1/passports/FR-20260829-0042/analysis-jobs",
+                    json={
+                        "expected_version": 1,
+                        "idempotency_key": "correlation-analysis-failure-001",
+                    },
+                )
+                assert started.status_code == 200, started.text
+                application.state.custody_service.analyst = FailedAnalyst()
+                failed = client.post("/tasks/outbox", json=started.json()["task"]["payload"])
+    finally:
+        request_logger.propagate = False
+
+    assert failed.status_code == 409, failed.text
+    task_record = next(
+        record
+        for record in _request_records(caplog)
+        if record.route_template == "/tasks/outbox"
+    )
+    assert task_record.error_code == "agent_tool_trajectory_incomplete"
+    safe_handler = next(
+        handler
+        for handler in request_logger.handlers
+        if getattr(handler, "_found_roll_safe_request_handler", False)
+    )
+    rendered = safe_handler.format(task_record)
+    assert private_message not in rendered
+    assert safe_analysis_error_code("untrusted_dynamic_failure_code") is None

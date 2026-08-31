@@ -27,6 +27,7 @@ from .correlation import (
     configure_safe_request_logger,
     normalize_correlation_id,
     reset_correlation_id,
+    safe_analysis_error_code,
 )
 from .custody_service import CustodyService
 from .domain import (
@@ -330,6 +331,7 @@ def create_app(
                     "http_method": request.method,
                     "route_template": route_template,
                     "status_code": status_code,
+                    "error_code": getattr(request.state, "safe_error_code", None),
                     "latency_ms": round((perf_counter() - started) * 1000, 3),
                 },
             )
@@ -367,7 +369,8 @@ def create_app(
         verify_admin_token(admin_token, settings, production_only=True)
 
     @application.exception_handler(DomainError)
-    async def domain_error_handler(_request: Request, exc: DomainError):
+    async def domain_error_handler(request: Request, exc: DomainError):
+        request.state.safe_error_code = safe_analysis_error_code(exc.code)
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message}},

@@ -428,7 +428,7 @@ async function createFixture(t) {
   await writeFile(path.join(repoRoot, "docs", "release.md"), "# Release\nCanonical evidence is bound by digest.\n", "utf8");
 
   const versions = {
-    prompt: "found-roll-case-analyst-prompt-v1",
+    prompt: "found-roll-case-analyst-prompt-v2",
     output_schema: "found-roll-analysis-proposal-v1",
     policy: "found-roll-release-v1",
   };

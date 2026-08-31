@@ -158,7 +158,7 @@ const expectedFrozenDemoTrajectory = [
   ["ITEM_PASSPORT_CLOSED", "RELEASED", "CLOSED"],
 ];
 const expectedContractVersions = {
-  prompt: "found-roll-case-analyst-prompt-v1",
+  prompt: "found-roll-case-analyst-prompt-v2",
   output_schema: "found-roll-analysis-proposal-v1",
   policy: "found-roll-release-v1",
 };

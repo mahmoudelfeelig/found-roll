@@ -5,7 +5,7 @@
   "finding_count": 0,
   "finding_values_included": false,
   "findings_by_rule": {},
-  "manifest_sha256": "ad63b8da4ede31311f16696fe7124fcf4b68fc1dfd87acf4adcd3838c901d00b",
+  "manifest_sha256": "966c8ea9fb022f4a399ee8ac15986e8a222804bb47c4719e7d310e9212430f4b",
   "pattern_count": 4,
   "recorded_findings": [],
   "scanned_byte_count": 647568,
