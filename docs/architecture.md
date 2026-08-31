@@ -23,7 +23,7 @@ The checked PNG above is the single system-level architecture diagram; the earli
 | Staff and supervisor | Record a minimal identity-check attestation and approve a valuable-item handoff | Delegate the approval decision to the model |
 | `found-roll-simulator` | Expose fictional custodian inventories and a real HTTPS reservation/attestation contract for the synthetic fixture | Claim to be an independent airport, transit operator, courier, locker, or source of physical proof |
 
-The Case Analyst output is constrained by a typed schema. `evidence_sufficient_for_claim` is intentionally fixed to `false`; deterministic code performs any later claim-evidence acceptance after an exact keyed-digest comparison and all hard gates.
+The Case Analyst output is constrained by a typed schema. `evidence_sufficient_for_claim` crosses the Vertex boundary as a strict JSON boolean and deterministic typed validation accepts only `false`; deterministic code performs any later claim-evidence acceptance after an exact keyed-digest comparison and all hard gates.
 
 ## Canonical event flow
 

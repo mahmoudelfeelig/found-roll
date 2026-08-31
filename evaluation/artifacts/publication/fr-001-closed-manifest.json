@@ -37,8 +37,8 @@
       "evt-68ed48f3938157bda3577f5a",
       "evt-5f5ae464793650f7a6615176",
       "evt-6002c2b43eb750aeb9c44eff",
-      "evt-73794f341a195b7cac57721d",
-      "evt-e92ed5ccf64155a79d3224e2",
+      "evt-e5e74b36faea5d38bc5ab7ba",
+      "evt-103606a8a0db5cd9a5ede93e",
       "evt-f29e2d7f8efb50b6b7ae38df",
       "evt-135b92bb69bf550f8f55c3dd",
       "evt-2c6072a0611e5163a6417615",
@@ -46,12 +46,12 @@
       "evt-3a4e4d9769d352a693bd2132",
       "evt-6d29601f62ee507c99282fcc",
       "evt-60e21c8eb6fa57a4b9f92faf",
-      "evt-73bafb0fc6e95416905d8735",
+      "evt-d857b7364cb75786a471a727",
       "evt-4b56a2f789a05393b9ce4e6d",
       "evt-689d4080b0595213b9aea505",
       "evt-155eab92dc185150b1610588",
       "evt-94c890cc718e5311838cb0d2",
-      "evt-d90e0479de8a567c8ec6a83e",
+      "evt-9f5cbf7f4c6457628b84e1a5",
       "evt-9c83ba04544e5f41a71b8036"
     ],
     "evidence_digests": [
@@ -62,12 +62,12 @@
       "3ff0717277a2c6737313cc51738a718e5a3f0879ec5624c2684fc9d8b32a1829",
       "ef452fa92d43ad80b4e9f1bc2754260abe6cdbfa83e188b2a6faa1de49988fa6"
     ],
-    "final_event_hash": "0ef4646e13d249150c6c140a7f62b47366bd2280834e238ff8961fc427892fbf",
+    "final_event_hash": "45c797f356315c67f0c6302b05b9fc611fd97a2b8eb13d571714a60bc056de63",
     "final_state": "CLOSED",
     "final_version": 19,
-    "first_event_hash": "d54b0594b039f68333b92cf4563ce53527ed8fc46bdec7966a0613ac681fca20",
+    "first_event_hash": "3837e0dade0a1e747a37976044cefc7817a822d5a175643af8d33a7daaa5a8eb",
     "internally_consistent": true,
-    "manifest_id": "manifest-0d8863f6b0881715fbfe1f7d",
+    "manifest_id": "manifest-d8ab16cd2fe929a4bd36dc19",
     "physical_transfer_proven": false,
     "schema_version": "1"
   }

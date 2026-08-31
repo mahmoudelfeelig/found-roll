@@ -380,11 +380,21 @@ class AnalysisProposal(BaseModel):
     ranked_candidate_ids: list[str] = Field(min_length=1, max_length=5)
     selected_candidate_id: str | None
     visible_signals: list[str] = Field(max_length=8)
-    evidence_sufficient_for_claim: Literal[False] = False
+    # google-genai 2.20.0 rejects non-string Literal values while translating
+    # an ADK output schema for Vertex AI. Keep the transport schema boolean and
+    # enforce the same fail-closed invariant during typed validation instead.
+    evidence_sufficient_for_claim: bool = Field(default=False, strict=True)
     restricted_attribute_id: str
     next_question: str = Field(min_length=12, max_length=240)
     manual_review_reason: str | None = None
     tool_trajectory: list[str] = Field(min_length=1, max_length=12)
+
+    @field_validator("evidence_sufficient_for_claim")
+    @classmethod
+    def evidence_can_never_authorize_a_claim(cls, value: bool) -> bool:
+        if value is not False:
+            raise ValueError("the analyst cannot declare evidence sufficient for a claim")
+        return value
 
     @field_validator("next_question")
     @classmethod

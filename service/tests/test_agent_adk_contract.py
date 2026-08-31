@@ -1,9 +1,11 @@
+from copy import deepcopy
 from importlib.metadata import version
 from types import SimpleNamespace
 
 import pytest
 from google.adk.agents.invocation_context import InvocationContext, LlmCallsLimitExceededError
 from google.adk.events import Event
+from google.genai._transformers import process_schema
 from google.genai.types import (
     Content,
     FunctionCall,
@@ -76,6 +78,45 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     analyst._configure_vertex_environment()
     assert __import__("os").environ["GOOGLE_GENAI_USE_ENTERPRISE"] == "TRUE"
     assert __import__("os").environ["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+
+
+def test_analysis_schema_is_vertex_compatible_and_keeps_claim_authority_fail_closed():
+    schema = deepcopy(AnalysisProposal.model_json_schema())
+
+    # Exercise the exact pinned google-genai schema transformer that prepares
+    # the ADK response schema for Vertex AI, without making a network request.
+    process_schema(schema, None)
+
+    evidence_schema = schema["properties"]["evidence_sufficient_for_claim"]
+    assert evidence_schema["type"] == "boolean"
+    assert "const" not in evidence_schema
+    proposal = {
+        "ranked_candidate_ids": ["NA-PCH-231"],
+        "selected_candidate_id": "NA-PCH-231",
+        "visible_signals": ["repaired lower corner seam"],
+        "restricted_attribute_id": "lens_serial_last4",
+        "next_question": "What are the final four characters on the lens serial label?",
+        "tool_trajectory": ["load_candidate:success"],
+    }
+    assert AnalysisProposal(**proposal).evidence_sufficient_for_claim is False
+    assert (
+        AnalysisProposal(
+            **proposal,
+            evidence_sufficient_for_claim=False,
+        ).evidence_sufficient_for_claim
+        is False
+    )
+    with pytest.raises(ValueError, match="cannot declare evidence sufficient"):
+        AnalysisProposal(
+            **proposal,
+            evidence_sufficient_for_claim=True,
+        )
+    for non_boolean_false in ("false", "true", 0, 1, None):
+        with pytest.raises(ValueError):
+            AnalysisProposal(
+                **proposal,
+                evidence_sufficient_for_claim=non_boolean_false,
+            )
 
 
 def test_adk_events_become_sanitized_bound_execution_evidence():
