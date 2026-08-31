@@ -108,7 +108,7 @@ try {
         -Message 'Frozen evaluation receipt is not a truthful 16/16 local pass with canonical status incomplete.'
     Assert-JsonInvariant `
         -Path 'evaluation\privacy-scan-results.json' `
-        -Check { param($x) $x.status -eq 'PASS' -and $x.finding_count -eq 0 -and $x.skipped_large_file_count -eq 0 -and $x.decode_replacement_count -eq 0 -and $x.unsupported_file_count -eq 5 -and $x.unsupported_extensions.'.jpg' -eq 5 } `
+        -Check { param($x) $x.status -eq 'PASS' -and $x.finding_count -eq 0 -and $x.skipped_large_file_count -eq 0 -and $x.decode_replacement_count -eq 0 -and $x.unsupported_file_count -eq 6 -and $x.unsupported_extensions.'.jpg' -eq 5 -and $x.unsupported_extensions.'.png' -eq 1 } `
         -Message 'Strict publication scan is not clean or its known binary-image boundary changed.'
     Assert-JsonInvariant `
         -Path 'evaluation\privacy-scan-docs-results.json' `

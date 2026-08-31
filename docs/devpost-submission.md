@@ -24,7 +24,7 @@ This is deliberately a research-informed story, not a claim that a team member p
 
 Found Roll creates one Item Passport across three fictional custodian namespaces: Grand Hall, Metro Loop, and Northport Air. The flagship synthetic case follows a worn black camera pouch whose route crosses all three.
 
-The hosted root is a public, no-store Judge Walkthrough of that fixed closed synthetic case. It is strictly read-only and accepts no credentials. It shows only redacted case status/timeline, bounded-analyst metadata, and internal manifest consistency; it omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs. No public proof-of-action receipt is implemented or published. The protected staff workspace remains separate and will appear only in the pending continuous video after the entrant records it.
+The hosted root is a public, no-store Completed Case Story for that fixed closed synthetic case. It is strictly read-only and accepts no credentials. It shows only redacted case status/timeline, bounded-analyst metadata, and internal manifest consistency; it omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs. No public proof-of-action receipt is implemented or published. The protected staff workspace remains separate and will appear only in the pending continuous video after the entrant records it.
 
 Staff begin with a local safety screen. Passports/government IDs, payment cards, access badges, medication, suspicious packages, and unknown sensitive categories receive category-specific instructions routed to the selected fictional custodian's specialist desk. Those branches expose no upload, make no network request, create no case, and call no model. For an ordinary intake accepted through the combined demo-and-staff boundary, Found Roll records provenance but does not queue model work until staff explicitly authorizes a derived preview. At that point the service—not the browser—commits the outbox command and queues the bounded background investigation. A Case Analyst built with Google ADK and Gemini can inspect only the custody engine's deterministically ordered authorized packet, return source-linked observations, and propose the wording of the next permitted question.
 
@@ -150,7 +150,7 @@ Fixture hashes recorded during drafting; regenerate and compare them at release 
 
 | Submission field | Final value |
 | --- | --- |
-| Hosted project | [Found Roll Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough), a current public read-only redacted synthetic case; the protected flow belongs in the final continuous demo |
+| Hosted project | [Found Roll Completed Case Story](https://foundroll.elfeel.me/), with the direct [Cloud Run deployment](https://found-roll-app-1061926987746.us-central1.run.app/) retained as Google Cloud proof; the protected flow belongs in the final continuous demo |
 | Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll); the immutable submission tag is pending the freeze gate |
 | Architecture | [Architecture and authority boundaries](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture.md) and the [rendered diagram](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture-diagram.png) |
 | Evaluation report | [Local evaluation with explicit canonical limits](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/evaluation.md) |

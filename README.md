@@ -21,7 +21,7 @@ Northport Air, Metro Loop, Grand Hall, Relay Post, every inventory row, every ro
 
 ## Product surfaces
 
-The hosted root is a public, non-mutating Judge Walkthrough for the fixed completed synthetic case. It accepts no credentials and exposes only a redacted status/timeline, bounded-analyst metadata, and internal manifest-consistency summary. It omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs; it neither proves ownership nor possession nor performs a physical handoff.
+The hosted root is a public, non-mutating Completed Case Story for the fixed completed synthetic case. It accepts no credentials and exposes only a redacted status/timeline, bounded-analyst metadata, and internal manifest-consistency summary. It omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs; it neither proves ownership nor possession nor performs a physical handoff.
 
 No public proof-of-action receipt is implemented or published. A future public artifact is a release-checklist item only and requires explicit authorization plus a separate privacy review before it can be designed, exposed, or described as evidence. It would not replace the private five-run evidence set, an independent ledger, model-quality evidence, or proof of ownership, identity, possession, or physical handoff.
 
@@ -33,15 +33,40 @@ The hosted browser has three reusable runtime credential boundaries, not one sha
 
 ## Judge testing
 
-The public [Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough) is the quickest no-credential check: it proves that the hosted root is read-only, redacted, and visually grounded in a closed synthetic case. It cannot mutate a case, reveal protected media, or stand in for the protected workflow.
+The public [Completed Case Story](https://foundroll.elfeel.me/) is the quickest no-credential check: it proves that the hosted root is read-only, redacted, and visually grounded in a closed synthetic case. The same build remains available at its direct [Cloud Run URL](https://found-roll-app-1061926987746.us-central1.run.app/) so reviewers can verify the Google Cloud runtime without relying on the custom hostname. Neither route can mutate a case, reveal protected media, or stand in for the protected workflow.
 
 For a free local review, install the locked dependencies described below and run `npm test` plus `service\.venv\Scripts\python.exe -m pytest service\tests`. Those checks exercise the deterministic fixture, evidence/consent boundaries, auto-queue contract, state transitions, retries, and privacy surfaces without Google Cloud credentials, paid APIs, user media, or a billing account. They prove local contracts only; live Google Cloud claims require a separately frozen tagged release and its private evidence gate.
+
+## Reproducible testing
+
+The complete local evidence path uses the same locked dependencies and PowerShell gate as [CI](.github/workflows/verify.yml). For an exact CI match, use Node.js 24.11.0, Python 3.13.13, npm, and PowerShell 7. From a fresh clone:
+
+```powershell
+git clone https://github.com/mahmoudelfeelig/found-roll.git
+cd found-roll
+npm ci --no-audit --no-fund
+python -m venv service/.venv
+service/.venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r service/requirements-dev.lock
+python -m venv simulator/.venv
+simulator/.venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes -r simulator/requirements-dev.lock
+./scripts/verify-all.ps1
+```
+
+A successful run ends with `Found Roll complete local gate passed`. It rebuilds the production client, runs the frontend, custody-service, simulator, privacy, loopback HTTP, and artifact-integrity checks, and regenerates [`evaluation/results.json`](evaluation/results.json) with 16/16 local synthetic scenarios and status `LOCAL_PASS_CANONICAL_INCOMPLETE`. Both publication privacy scans must report `PASS` with zero findings, and the loopback workflow must finish `CLOSED` with a valid hash chain.
+
+With Google Chrome installed, the public-page viewport and redaction check is also reproducible:
+
+```powershell
+npm run qa:design
+```
+
+The local gate uses no Gemini or Google Cloud calls, credentials, paid APIs, user media, or billing account. It proves deterministic local contracts only; the custom hostname is the polished public route, while the direct `.run.app` URL and recorded Cloud Console evidence establish the live Google Cloud deployment.
 
 ## 90-second judge route
 
 | Window | Open or verify | What it establishes |
 | --- | --- | --- |
-| 0:00–0:20 | The public Judge Walkthrough | The hosted surface is synthetic, redacted, read-only, and does not expose credentials or protected media. |
+| 0:00–0:20 | The public Completed Case Story | The hosted surface is synthetic, redacted, read-only, and does not expose credentials or protected media. |
 | 0:20–0:40 | The walkthrough's timeline and limitation copy | The fixed case is synthetic and public access remains a redacted, non-mutating product surface rather than workflow evidence. |
 | 0:40–1:05 | The [architecture diagram](docs/architecture-diagram.png) and its [authority explanation](docs/architecture.md) | The agent is confined to a deterministic packet and proposal tools; policy and humans own evidence acceptance and release. |
 | 1:05–1:30 | The public repository's evaluation and release disclosures | Local results remain local; the private five-run gate and recorded Google Cloud evidence carry the operational release claim. |
@@ -57,7 +82,7 @@ npm ci --prefer-offline --no-audit --no-fund
 npm run dev -- --host 127.0.0.1
 ```
 
-The root defaults to the public Judge Walkthrough and uses only the non-mutating public `/api/v1/healthz` and `/api/v1/judge-walkthrough` reads; if the read-only service projection is unavailable, it shows an unavailable state rather than private fixture data. The protected staff workspace is at `?view=staff`. In a combined app image it probes `/api/v1/healthz` and distinguishes fixture from live Vertex ADK mode. The namespaced route avoids the Google Frontend 404 observed at the exact `/healthz` path on the deployed Cloud Run service; `/healthz` remains available for container-local probes.
+The root defaults to the public Completed Case Story and uses only the non-mutating public `/api/v1/healthz` and `/api/v1/judge-walkthrough` reads; if the read-only service projection is unavailable, it shows an unavailable state rather than private fixture data. The protected staff workspace is at `?view=staff`. In a combined app image it probes `/api/v1/healthz` and distinguishes fixture from live Vertex ADK mode. The namespaced route avoids the Google Frontend 404 observed at the exact `/healthz` path on the deployed Cloud Run service; `/healthz` remains available for container-local probes.
 
 The deterministic synthetic answer remains in server-side fixture/test material for reproducibility; it is not compiled into the browser. In connected mode, the operator loads the separate demo, staff, and supervisor runtime credentials through the staff control. The browser proves all three through the strict runtime-role probe, then sends each only to its matching boundary and never stores them beyond the tab.
 

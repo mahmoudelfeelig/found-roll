@@ -2,10 +2,10 @@
   "schema_version": "2",
   "status": "PREPARED_FOR_ANALYSIS",
   "canonical": false,
-  "prepared_at": "2026-08-31T18:31:50.0436847Z",
+  "prepared_at": "2026-08-31T22:38:12.6535484Z",
   "preparation_script_sha256": "aca6e3d5452e25ca4d04365b6385a8caf53920fb5439050039e67792755d53cb",
   "case_id": "FR-20260829-0042",
-  "workflow_epoch": "8cdd095c504d45acb820f34ba92ee09d",
+  "workflow_epoch": "471596fa4be34da58a5d41e5410a70c3",
   "case_version": 1,
   "case_state": "RECEIVED",
   "fixture_version": "camera-pouch-v1",
@@ -32,16 +32,16 @@
   "relay_mode": "http",
   "evidence": {
     "source_file": "pouch-front.jpg",
-    "original_id": "evd-14e6cd1f8e37b4fcec5ac6e49418df9c",
+    "original_id": "evd-7ff8d76a519c1ff5cd6124704dadaa18",
     "original_sha256": "7eecc012b0f8638fc59f2979ea0cdd3888e6cf5e9659eea2f30f0388bcea6d42",
     "original_generation": 1,
-    "preview_id": "evd-76be8a456318023e627f56f7acc6d6bc",
+    "preview_id": "evd-1f95f49971d9625123c67bc56df3539f",
     "preview_sha256": "058190a6782cfc89a89dacc61dd8cdff74bf7de7b31831ab4abcf64215b48a37",
     "preview_generation": 1,
     "preview_visibility": "MODEL_AUTHORIZED",
     "active_pair_ids": [
-      "evd-14e6cd1f8e37b4fcec5ac6e49418df9c",
-      "evd-76be8a456318023e627f56f7acc6d6bc"
+      "evd-1f95f49971d9625123c67bc56df3539f",
+      "evd-7ff8d76a519c1ff5cd6124704dadaa18"
     ],
     "current_epoch_record_count": 2,
     "active_for_analysis": true,

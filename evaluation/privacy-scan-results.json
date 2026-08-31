@@ -5,10 +5,10 @@
   "finding_count": 0,
   "finding_values_included": false,
   "findings_by_rule": {},
-  "manifest_sha256": "83e70fedb190c62732fe9128666fc58a6e3d88482064cbbac7d351f544f104dd",
+  "manifest_sha256": "5398657cd1f8efbb77699247f635eba2ebf99d24f7874d3971f81087921c1e2e",
   "pattern_count": 4,
   "recorded_findings": [],
-  "scanned_byte_count": 665672,
+  "scanned_byte_count": 684782,
   "scanned_file_count": 33,
   "schema_version": "1.0",
   "scope": [
@@ -21,7 +21,8 @@
   "skipped_large_file_count": 0,
   "status": "PASS",
   "unsupported_extensions": {
-    ".jpg": 5
+    ".jpg": 5,
+    ".png": 1
   },
-  "unsupported_file_count": 5
+  "unsupported_file_count": 6
 }
