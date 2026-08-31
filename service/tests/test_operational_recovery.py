@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
+from threading import Barrier
 from types import SimpleNamespace
 
 from PIL import Image
@@ -678,6 +680,69 @@ class _FakeFirestoreModule:
         return function
 
 
+class _ExhaustedFirestoreModule:
+    @staticmethod
+    def transactional(_function):
+        def exhausted(_transaction):
+            from google.api_core.exceptions import Aborted
+
+            try:
+                raise Aborted("synthetic Firestore contention")
+            except Aborted as exc:
+                raise ValueError("Transaction failed after bounded retries.") from exc
+
+        return exhausted
+
+
+def _contention_repository(case: CaseRecord) -> FirestoreRepository:
+    prefix = "foundRoll"
+    repository = FirestoreRepository.__new__(FirestoreRepository)
+    repository._prefix = prefix
+    repository._client = _FakeFirestoreClient(
+        {f"{prefix}_passports/{case.id}": case.model_dump(mode="python")}
+    )
+    repository._firestore = _ExhaustedFirestoreModule()
+    return repository
+
+
+def _evidence_ready_spec(case: CaseRecord) -> MutationSpec:
+    return MutationSpec(
+        case_id=case.id,
+        expected_version=case.version,
+        target_state=CustodyState.EVIDENCE_READY,
+        event_type="EVIDENCE_PACKET_READY",
+        actor="service:intake",
+        reason="Synthetic transaction-contention fixture.",
+        idempotency_key=f"case:{case.id}:analysis:contention:evidence-ready",
+        fingerprint="contention-fingerprint",
+        occurred_at=datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_firestore_retry_exhaustion_maps_an_advanced_case_to_stale_version():
+    initial = fixture_case().model_copy(update={"version": 1})
+    advanced = initial.model_copy(
+        update={"state": CustodyState.EVIDENCE_READY, "version": initial.version + 1}
+    )
+    repository = _contention_repository(advanced)
+
+    with pytest.raises(Conflict) as error:
+        repository.apply_mutation(_evidence_ready_spec(initial))
+
+    assert error.value.code == "stale_case_version"
+    assert set(repository._client.rows) == {f"foundRoll_passports/{initial.id}"}
+
+
+def test_firestore_retry_exhaustion_remains_retryable_without_a_winner():
+    initial = fixture_case().model_copy(update={"version": 1})
+    repository = _contention_repository(initial)
+
+    with pytest.raises(Unavailable) as error:
+        repository.apply_mutation(_evidence_ready_spec(initial))
+
+    assert error.value.code == "firestore_transaction_contention"
+
+
 def test_firestore_fixture_reset_deletes_only_exact_synthetic_scope():
     prefix = "foundRoll_synthetic_demo"
     rows = {
@@ -843,6 +908,17 @@ class _FailOnceAnalysisRequestRepository(InMemoryRepository):
         return super().apply_mutation(spec, **kwargs)
 
 
+class _BarrierAnalysisRepository(InMemoryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analysis_barrier = Barrier(2)
+
+    def apply_mutation(self, spec, **kwargs):
+        if spec.event_type == "EVIDENCE_PACKET_READY":
+            self.analysis_barrier.wait(timeout=5)
+        return super().apply_mutation(spec, **kwargs)
+
+
 def test_cloud_task_retry_receipt_keeps_the_publisher_contract_without_payload():
     settings = Settings(tasks_mode="cloud")
     publisher = _QueuedPublisher()
@@ -905,19 +981,29 @@ def test_exact_analysis_retry_recovers_the_intermediate_evidence_ready_state():
 def test_new_analysis_command_with_stale_version_cannot_join_inflight_work():
     settings = Settings(tasks_mode="cloud")
     publisher = _QueuedPublisher()
-    app = create_app(settings=settings, task_publisher=publisher)
+    repository = _BarrierAnalysisRepository()
+    app = create_app(
+        settings=settings,
+        repository=repository,
+        task_publisher=publisher,
+    )
     with TestClient(app) as client:
-        winner = client.post(
-            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
-            json={"expected_version": 1, "idempotency_key": "contention-winner-001"},
-        )
-        loser = client.post(
-            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
-            json={"expected_version": 1, "idempotency_key": "contention-loser-001"},
-        )
+        def contend(key):
+            return client.post(
+                f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+                json={"expected_version": 1, "idempotency_key": key},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(
+                pool.map(contend, ("contention-a-001", "contention-b-001"))
+            )
         events = client.get(f"/api/v1/passports/{DEMO_CASE_ID}/events").json()["items"]
 
-    assert winner.status_code == 200, winner.text
+    winner = next(response for response in responses if response.status_code == 200)
+    loser = next(response for response in responses if response.status_code == 409)
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert winner.json()["task"]["queued"] is True
     assert loser.status_code == 409, loser.text
     assert loser.json()["error"]["code"] == "stale_case_version"
     assert publisher.calls == 1

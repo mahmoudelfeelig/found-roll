@@ -33,6 +33,16 @@ from .hashing import secure_equal, sha256_hex
 from .state_machine import assert_transition
 
 
+def _is_firestore_contention_exhaustion(exc: BaseException) -> bool:
+    """Recognize only Firestore's bounded transaction-abort exhaustion."""
+
+    try:
+        from google.api_core.exceptions import Aborted
+    except ImportError:  # pragma: no cover - Firestore mode already requires this dependency
+        return False
+    return isinstance(exc, Aborted) or isinstance(exc.__cause__, Aborted)
+
+
 @dataclass(slots=True)
 class MutationSpec:
     case_id: str
@@ -1486,7 +1496,40 @@ class FirestoreRepository:
             )
             return receipt, False
 
-        receipt, duplicate = commit(transaction)
+        try:
+            receipt, duplicate = commit(transaction)
+        except Exception as exc:
+            if not _is_firestore_contention_exhaustion(exc):
+                raise
+
+            # The Firestore client retries ABORTED commits a bounded number of
+            # times and then raises ValueError from the final Aborted error.
+            # Recover an identical committed command, distinguish a real stale
+            # writer, and keep unresolved contention retryable.
+            idem = idem_ref.get()
+            if idem.exists:
+                record = IdempotencyRecord.model_validate(idem.to_dict())
+                if record.fingerprint != spec.fingerprint:
+                    raise Conflict(
+                        "idempotency_conflict",
+                        "This idempotency key was already used for a different command.",
+                    ) from exc
+                receipt = MutationReceipt.model_validate(record.response)
+                duplicate = True
+            else:
+                snapshot = case_ref.get()
+                if not snapshot.exists:
+                    raise NotFound("Item Passport") from exc
+                current = CaseRecord.model_validate(snapshot.to_dict())
+                if current.version != spec.expected_version:
+                    raise Conflict(
+                        "stale_case_version",
+                        f"Expected Item Passport version {spec.expected_version}; current version is {current.version}.",
+                    ) from exc
+                raise Unavailable(
+                    "firestore_transaction_contention",
+                    "The custody transaction met bounded contention; retry the exact command.",
+                ) from exc
         return AppliedMutation(
             receipt=receipt,
             event=self.get_event(spec.case_id, receipt.event_id),
