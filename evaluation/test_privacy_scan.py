@@ -101,6 +101,8 @@ def test_structured_canary_ignores_opaque_substrings_but_detects_semantic_echo(t
     scanner = load_scanner()
     assert scanner.privacy_field_mode("cloud_build_asset_snapshot_before_utc") == "opaque"
     assert scanner.privacy_field_mode("cloud_build_asset_snapshot_after_utc") == "opaque"
+    assert scanner.privacy_field_mode("latency") == "opaque"
+    assert scanner.privacy_field_mode("latency_ms") == "opaque"
     assert scanner.privacy_field_mode("image_resources") == "reference"
     assert scanner.privacy_field_mode("package") == "reference"
     assert scanner.privacy_field_mode("image_package") == "reference"
@@ -148,6 +150,8 @@ def test_structured_canary_ignores_opaque_substrings_but_detects_semantic_echo(t
                 "cloud_build_asset_snapshot_before_utc": f"2026-08-30T03:{raw_value}:00Z",
                 "cloud_build_asset_snapshot_after_utc": f"2026-08-30T04:{raw_value}:00Z",
                 "project_number": f"106{raw_value}7746",
+                "latency": f"0.{raw_value}s",
+                "latency_ms": f"{raw_value}.00",
                 "revision": f"revision-abc{raw_value}def",
                 "revision_resource": f"projects/abc{raw_value}def/revisions/current",
                 "service_resource": f"projects/abc{raw_value}def/services/found-roll",
@@ -261,6 +265,8 @@ def test_wrong_answer_scenario_ignores_private_answer_substring_inside_event_has
 
     assert runner.privacy_field_mode("cloud_build_asset_snapshot_before_utc") == "opaque"
     assert runner.privacy_field_mode("cloud_build_asset_snapshot_after_utc") == "opaque"
+    assert runner.privacy_field_mode("latency") == "opaque"
+    assert runner.privacy_field_mode("latency_ms") == "opaque"
     assert runner.privacy_field_mode("image_resources") == "reference"
     assert runner.privacy_field_mode("package") == "reference"
     assert runner.privacy_field_mode("image_package") == "reference"

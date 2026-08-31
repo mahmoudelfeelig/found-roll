@@ -229,6 +229,12 @@ OPAQUE_PRIVACY_FIELD_NAMES = {
     "sha256",
     "evidence_digests",
     "idempotency_key",
+    # Cloud Run emits request duration strings such as "0.7831s". They are
+    # technical measurements, not semantic claimant text; treating them as
+    # opaque prevents a short private-answer canary from matching a decimal
+    # substring while still detecting an exact accidental disclosure.
+    "latency",
+    "latency_ms",
     "last_replay_task_name",
     "project_number",
     "release_task_name",

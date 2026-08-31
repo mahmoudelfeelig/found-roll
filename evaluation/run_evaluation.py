@@ -104,6 +104,8 @@ OPAQUE_PRIVACY_FIELD_NAMES = {
     "sha256",
     "evidence_digests",
     "idempotency_key",
+    "latency",
+    "latency_ms",
     "last_replay_task_name",
     "project_number",
     "release_task_name",
