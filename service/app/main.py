@@ -616,16 +616,31 @@ def create_app(
             preview_max_edge=settings.evidence_preview_max_edge,
         )
         active_pair = store.latest_complete_pair(case_id, case.workflow_epoch)
+        active_for_analysis = bool(
+            active_pair
+            and active_pair[0].id == original.id
+            and active_pair[1].id == preview.id
+            and active_pair[1].visibility == EvidenceVisibility.MODEL_AUTHORIZED
+        )
+        analysis_job = (
+            service.auto_start_authorized_intake_analysis(
+                case_id,
+                workflow_epoch=case.workflow_epoch,
+                original_id=original.id,
+                preview_id=preview.id,
+            )
+            # The helper binds exactly the pair returned by this upload. A
+            # concurrent later upload may change the display's latest-pair
+            # metadata, but it must not strand this already-authorized intake.
+            if preview.visibility == EvidenceVisibility.MODEL_AUTHORIZED
+            else None
+        )
         return {
             "original": original,
             "preview": preview,
             "workflow_epoch": case.workflow_epoch,
-            "active_for_analysis": bool(
-                active_pair
-                and active_pair[0].id == original.id
-                and active_pair[1].id == preview.id
-                and active_pair[1].visibility == EvidenceVisibility.MODEL_AUTHORIZED
-            ),
+            "active_for_analysis": active_for_analysis,
+            "analysis_job": analysis_job,
             "restricted_bytes_included": False,
         }
 
@@ -875,6 +890,23 @@ def create_app(
         _authorized: None = Depends(require_admin),
     ):
         return service.reconcile_demo_outbox(max_items=payload.max_items)
+
+    @application.post("/api/v1/admin/passports/{case_id}/outbox/reconcile")
+    def reconcile_authorized_intake_analysis(
+        case_id: str,
+        payload: OutboxReconcileRequest,
+        _authorized: None = Depends(require_admin),
+    ):
+        """Recover one server-created ordinary-intake analysis publication.
+
+        The route does not create a new command or expose its opaque payload; it
+        can only retry the deterministic outbox name after a PUBLISH failure.
+        """
+
+        return service.reconcile_authorized_intake_analysis(
+            case_id,
+            max_items=payload.max_items,
+        )
 
     return application
 

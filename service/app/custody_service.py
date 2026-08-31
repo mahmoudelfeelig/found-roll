@@ -39,7 +39,7 @@ from .domain import (
     utc_now,
 )
 from .errors import Conflict, DomainError, Forbidden, NotFound, Unavailable
-from .evidence import EvidenceStore
+from .evidence import EvidenceStore, get_exact_complete_pair
 from .fixtures import DEMO_CASE_ID, FIXTURE_DISCLOSURE, reset_demo_repository
 from .hashing import secret_digest, secure_equal, sha256_hex
 from .outbox import TaskPublisher, make_outbox, opaque_payload
@@ -128,27 +128,172 @@ class CustodyService:
             "payload": opaque_payload(outbox).model_dump(mode="json"),
         }
 
-    def reconcile_demo_outbox(self, *, max_items: int) -> dict:
-        """Republish only bounded, publication-stage failures for the frozen demo case."""
+    def _existing_analysis_job(self, case: CaseRecord) -> dict:
+        """Return the committed analysis command without creating another one."""
 
-        if not self.settings.demo_mode:
-            raise Forbidden("demo_recovery_disabled", "Synthetic demo recovery is disabled.")
+        rows = [row for row in self.repository.list_outboxes(case.id) if row.kind == OutboxKind.ANALYZE_CASE]
+        if not rows:
+            raise Conflict("analysis_outbox_missing", "The analyzing case has no outbox command.")
+        outbox = rows[-1]
+        return {
+            "case": CaseView.from_record(case),
+            "outbox": outbox,
+            "task": self._existing_task_receipt(outbox),
+        }
+
+    def _exact_authorized_evidence_refs(
+        self,
+        case_id: str,
+        *,
+        workflow_epoch: str,
+        original_id: str,
+        preview_id: str,
+    ) -> tuple[str, ...] | None:
+        """Return refs for the one immutable pair selected by an upload command."""
+
+        pair = get_exact_complete_pair(
+            self.evidence_store,
+            case_id=case_id,
+            workflow_epoch=workflow_epoch,
+            original_id=original_id,
+            preview_id=preview_id,
+        )
+        if pair is None:
+            return None
+        original, preview = pair
+        if (
+            original.visibility != EvidenceVisibility.STAFF_ONLY
+            or preview.visibility != EvidenceVisibility.MODEL_AUTHORIZED
+        ):
+            return None
+        return tuple(
+            f"evidence://{record.id}?sha256={record.sha256}"
+            for record in sorted(pair, key=lambda item: item.id)
+        )
+
+    def _auto_evidence_ready_refs(self, case_id: str, *, base_key: str) -> tuple[str, ...] | None:
+        """Read the exact refs committed by a server-managed intake transition."""
+
+        event_key = f"{base_key}:evidence-ready"
+        for event in reversed(self.repository.list_events(case_id)):
+            if event.idempotency_key == event_key and event.type == "EVIDENCE_PACKET_READY":
+                return tuple(event.evidence_refs)
+        return None
+
+    def auto_start_authorized_intake_analysis(
+        self,
+        case_id: str,
+        *,
+        workflow_epoch: str,
+        original_id: str,
+        preview_id: str,
+    ) -> dict | None:
+        """Queue one bounded analysis after a trusted ordinary intake reaches its evidence gate.
+
+        The browser never supplies the queue command.  The stored arm is set only
+        by the authenticated ordinary-intake route, and the evidence store must
+        still expose the current epoch's complete model-authorized pair.
+        """
+
+        frozen_evidence_refs = self._exact_authorized_evidence_refs(
+            case_id,
+            workflow_epoch=workflow_epoch,
+            original_id=original_id,
+            preview_id=preview_id,
+        )
+        if frozen_evidence_refs is None:
+            return None
+        # Pair-specific identity prevents a second upload from joining an
+        # interrupted first transition. A retry of the exact upload still
+        # resumes its immutable EVIDENCE_PACKET_READY event.
+        pair_digest = sha256_hex(
+            {
+                "workflow_epoch": workflow_epoch,
+                "evidence_refs": frozen_evidence_refs,
+            }
+        )[:24]
+        idempotency_key = f"auto-intake:{workflow_epoch}:{pair_digest}"
+        base_key = f"case:{case_id}:analysis:{idempotency_key}"
+        last_stale_error: Conflict | None = None
+        for _attempt in range(3):
+            case = self.repository.get_case(case_id)
+            if not case.analysis_auto_start_armed or case.workflow_epoch != workflow_epoch:
+                return None
+            if case.state == CustodyState.ANALYZING:
+                committed_refs = self._auto_evidence_ready_refs(case_id, base_key=base_key)
+                return self._existing_analysis_job(case) if committed_refs == frozen_evidence_refs else None
+            if case.state not in {CustodyState.RECEIVED, CustodyState.EVIDENCE_READY}:
+                return None
+            if case.state == CustodyState.EVIDENCE_READY:
+                # Only the exact pair that created this intermediate checkpoint
+                # can resume it after a process interruption.
+                committed_refs = self._auto_evidence_ready_refs(case_id, base_key=base_key)
+                if committed_refs != frozen_evidence_refs:
+                    return None
+            if self._exact_authorized_evidence_refs(
+                case_id,
+                workflow_epoch=workflow_epoch,
+                original_id=original_id,
+                preview_id=preview_id,
+            ) != frozen_evidence_refs:
+                return None
+            try:
+                return self.begin_analysis(
+                    case_id,
+                    expected_version=1,
+                    idempotency_key=idempotency_key,
+                    server_auto=True,
+                    frozen_evidence_refs=frozen_evidence_refs,
+                )
+            except Conflict as error:
+                if error.code != "stale_case_version":
+                    raise
+                # A concurrent upload can observe the committed EVIDENCE_READY
+                # event before its sibling commits ANALYZING. Re-entering with
+                # the same key resumes that exact first transition safely.
+                last_stale_error = error
+
+        raced_case = self.repository.get_case(case_id)
+        if raced_case.workflow_epoch == workflow_epoch and raced_case.state == CustodyState.ANALYZING:
+            committed_refs = self._auto_evidence_ready_refs(case_id, base_key=base_key)
+            if committed_refs == frozen_evidence_refs:
+                return self._existing_analysis_job(raced_case)
+        assert last_stale_error is not None
+        raise last_stale_error
+
+    def _reconcile_publish_outboxes(
+        self,
+        case_id: str,
+        *,
+        max_items: int,
+        allowed_kinds: set[OutboxKind] | None = None,
+    ) -> dict:
+        """Republish a bounded set of deterministic commands after enqueue failure."""
+
         rows = sorted(
-            self.repository.list_outboxes(DEMO_CASE_ID),
+            self.repository.list_outboxes(case_id),
             key=lambda row: (row.created_at, row.id),
         )
         eligible = [
             row
             for row in rows
-            if row.status == OutboxStatus.PENDING
-            or (
-                row.status == OutboxStatus.FAILED
-                and row.failure_stage == OutboxFailureStage.PUBLISH
+            if (allowed_kinds is None or row.kind in allowed_kinds)
+            and (
+                row.status == OutboxStatus.PENDING
+                or (
+                    row.status == OutboxStatus.FAILED
+                    and row.failure_stage == OutboxFailureStage.PUBLISH
+                )
             )
         ][:max_items]
         items: list[dict] = []
         recovered = 0
         for row in eligible:
+            if row.status == OutboxStatus.FAILED:
+                # Preserve only the deterministic command identity. A fresh
+                # PENDING marker makes the recovery state explicit before the
+                # publisher reuses the same Cloud Tasks name.
+                self.repository.mark_outbox(row.id, OutboxStatus.PENDING)
             try:
                 result = self._publish_outbox(row)
             except Unavailable:
@@ -177,11 +322,38 @@ class CustodyService:
                 }
             )
         return {
-            "case_id": DEMO_CASE_ID,
+            "case_id": case_id,
             "eligible": len(eligible),
             "recovered": recovered,
             "items": items,
         }
+
+    def reconcile_demo_outbox(self, *, max_items: int) -> dict:
+        """Republish only bounded, publication-stage failures for the frozen demo case."""
+
+        if not self.settings.demo_mode:
+            raise Forbidden("demo_recovery_disabled", "Synthetic demo recovery is disabled.")
+        return self._reconcile_publish_outboxes(DEMO_CASE_ID, max_items=max_items)
+
+    def reconcile_authorized_intake_analysis(self, case_id: str, *, max_items: int) -> dict:
+        """Recover only the server-created analysis command for one ordinary intake."""
+
+        case = self.repository.get_case(case_id)
+        if not case.analysis_auto_start_armed:
+            raise Forbidden(
+                "ordinary_intake_recovery_not_allowed",
+                "This recovery path is reserved for server-managed ordinary intakes.",
+            )
+        if case.state != CustodyState.ANALYZING:
+            raise Conflict(
+                "ordinary_intake_recovery_state_invalid",
+                "Only an analyzing ordinary intake can recover its analysis publication.",
+            )
+        return self._reconcile_publish_outboxes(
+            case_id,
+            max_items=max_items,
+            allowed_kinds={OutboxKind.ANALYZE_CASE},
+        )
 
     def snapshot(self, case_id: str) -> dict:
         case = self.repository.get_case(case_id)
@@ -381,8 +553,26 @@ class CustodyService:
             for record in sorted((original, preview), key=lambda item: item.id)
         ]
 
-    def begin_analysis(self, case_id: str, *, expected_version: int, idempotency_key: str) -> dict:
+    def begin_analysis(
+        self,
+        case_id: str,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+        server_auto: bool = False,
+        frozen_evidence_refs: tuple[str, ...] | None = None,
+    ) -> dict:
         case = self.repository.get_case(case_id)
+        if case.analysis_auto_start_armed and not server_auto:
+            raise Conflict(
+                "ordinary_intake_auto_queue_only",
+                "Ordinary intake analysis is queued only by the authorized evidence workflow.",
+            )
+        if server_auto:
+            if not case.analysis_auto_start_armed or not frozen_evidence_refs:
+                raise ValueError("server-managed analysis requires one frozen authorized evidence pair")
+        elif frozen_evidence_refs is not None:
+            raise ValueError("frozen evidence refs are reserved for server-managed analysis")
         base_key = f"case:{case_id}:analysis:{idempotency_key}"
         replay_event_suffix = {
             CustodyState.EVIDENCE_READY: "evidence-ready",
@@ -402,7 +592,7 @@ class CustodyService:
                 f"Expected Item Passport version {expected_version}; current version is {case.version}.",
             )
         if case.state == CustodyState.RECEIVED:
-            evidence_refs = self._analysis_evidence_refs(case_id)
+            evidence_refs = list(frozen_evidence_refs) if server_auto else self._analysis_evidence_refs(case_id)
             is_fixture = any(reference.startswith("fixture://") for reference in evidence_refs)
             self._mutation(
                 case=case,
@@ -415,11 +605,22 @@ class CustodyService:
                     else "Uploaded staff evidence and its derived model-authorized preview passed the intake gate."
                 ),
                 key=f"{base_key}:evidence-ready",
-                fingerprint_data={"case_id": case_id, "action": "evidence-ready"},
+                fingerprint_data={
+                    "case_id": case_id,
+                    "action": "evidence-ready",
+                    "evidence_refs": evidence_refs,
+                },
                 evidence_refs=evidence_refs,
             )
             case = self.repository.get_case(case_id)
         if case.state == CustodyState.EVIDENCE_READY:
+            if server_auto:
+                committed_refs = self._auto_evidence_ready_refs(case_id, base_key=base_key)
+                if committed_refs != frozen_evidence_refs:
+                    raise Conflict(
+                        "ordinary_intake_evidence_pair_mismatch",
+                        "The server-managed analysis command is bound to a different evidence pair.",
+                    )
             outbox = make_outbox(OutboxKind.ANALYZE_CASE, case, created_at=self.clock())
             self._mutation(
                 case=case,
@@ -428,7 +629,11 @@ class CustodyService:
                 actor="service:workflow",
                 reason="Queued a bounded proposal-only Case Analyst run with opaque task identifiers.",
                 key=f"{base_key}:analyzing",
-                fingerprint_data={"case_id": case_id, "action": "analyzing"},
+                fingerprint_data={
+                    "case_id": case_id,
+                    "action": "analyzing",
+                    "evidence_refs": list(frozen_evidence_refs or ()),
+                },
                 outbox=outbox,
                 task_id=outbox.task_name,
             )
@@ -439,15 +644,7 @@ class CustodyService:
                 "task": publish_result,
             }
         if case.state == CustodyState.ANALYZING:
-            rows = [row for row in self.repository.list_outboxes(case_id) if row.kind == OutboxKind.ANALYZE_CASE]
-            if not rows:
-                raise Conflict("analysis_outbox_missing", "The analyzing case has no outbox command.")
-            outbox = rows[-1]
-            return {
-                "case": CaseView.from_record(case),
-                "outbox": outbox,
-                "task": self._existing_task_receipt(outbox),
-            }
+            return self._existing_analysis_job(case)
         raise Conflict("analysis_not_allowed", f"Analysis cannot start from {case.state.value}.")
 
     def queue_release_task_replay(self, case_id: str, *, idempotency_key: str) -> dict:
@@ -1641,6 +1838,7 @@ class CustodyService:
             found_at=found_at,
             found_zone=found_zone,
             report_route=report_route,
+            analysis_auto_start_armed=True,
             created_at=occurred_at,
             updated_at=occurred_at,
         )

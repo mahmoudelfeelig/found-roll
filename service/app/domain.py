@@ -226,6 +226,10 @@ class CaseRecord(BaseModel):
     model_invocation_count: int | None = Field(default=None, ge=0, le=MAX_LLM_INVOCATIONS)
     model_tool_trajectory: list[AgentToolOutcome] = Field(default_factory=list, max_length=12)
     model_typed_output_valid: bool = False
+    # Only ordinary intakes created through the combined demo-and-staff boundary
+    # may enqueue their first bounded analysis after staff explicitly authorizes
+    # the derived preview. Existing persisted cases remain safely unarmed.
+    analysis_auto_start_armed: bool = False
     last_event_hash: str = "0" * 64
     last_event_sequence: int = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -545,6 +549,7 @@ class CaseView(BaseModel):
     model_invocation_count: int | None
     model_tool_trajectory: list[AgentToolOutcome]
     model_typed_output_valid: bool
+    analysis_auto_start_armed: bool
     event_count: int
     created_at: datetime
     updated_at: datetime
@@ -581,6 +586,7 @@ class CaseView(BaseModel):
             model_invocation_count=case.model_invocation_count,
             model_tool_trajectory=case.model_tool_trajectory,
             model_typed_output_valid=case.model_typed_output_valid,
+            analysis_auto_start_armed=case.analysis_auto_start_armed,
             event_count=case.last_event_sequence,
             created_at=case.created_at,
             updated_at=case.updated_at,

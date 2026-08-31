@@ -331,6 +331,36 @@ class EvidenceStore(Protocol):
     ) -> list[EvidenceRecord]: ...
 
 
+def get_exact_complete_pair(
+    store: EvidenceStore,
+    *,
+    case_id: str,
+    workflow_epoch: str,
+    original_id: str,
+    preview_id: str,
+) -> tuple[EvidenceRecord, EvidenceRecord] | None:
+    """Load one immutable, internally coherent evidence pair by its exact IDs.
+
+    This deliberately does not consult ``latest_complete_pair``. An upload that
+    wins a later race must not change the evidence refs already selected for an
+    authorized background command.
+    """
+
+    try:
+        original = store.get_record(original_id)
+        preview = store.get_record(preview_id)
+    except NotFound:
+        return None
+    if not _records_are_one_pair(
+        original,
+        preview,
+        case_id=case_id,
+        workflow_epoch=workflow_epoch,
+    ):
+        return None
+    return original, preview
+
+
 class InMemoryEvidenceStore:
     mode = "memory"
     bucket_name = None

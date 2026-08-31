@@ -1,6 +1,6 @@
 # Devpost submission draft
 
-This copy is designed for the **Taskmaster** category and the public `v1.0.0` release. Its cloud claims are valid only when the private release verifier passes against that exact tag; never publish a claim from a partial run or a different commit.
+This is a pre-release **Taskmaster** draft. Its cloud claims become publishable only after the private release verifier passes against one exact public tag; never present an untagged branch, partial run, or planned video as final proof.
 
 ## Title
 
@@ -26,7 +26,7 @@ Found Roll creates one Item Passport across three fictional custodian namespaces
 
 The hosted root is a public, no-store Judge Walkthrough of that fixed closed synthetic case. It is strictly read-only and accepts no credentials. It shows only redacted case status/timeline, bounded-analyst metadata, and internal manifest consistency; it omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs. The protected staff workspace remains separate and is demonstrated in the continuous video.
 
-Staff begin with a local safety screen. Passports/government IDs, payment cards, access badges, medication, suspicious packages, and unknown sensitive categories receive category-specific instructions routed to the selected fictional custodian's specialist desk. Those branches expose no upload, make no network request, create no case, and call no model. For an ordinary intake, Found Roll records provenance and queues a background investigation. A bounded Case Analyst built with Google ADK and Gemini compares authorized multimodal evidence, searches the three custodian adapters, and proposes the next evidence action.
+Staff begin with a local safety screen. Passports/government IDs, payment cards, access badges, medication, suspicious packages, and unknown sensitive categories receive category-specific instructions routed to the selected fictional custodian's specialist desk. Those branches expose no upload, make no network request, create no case, and call no model. For an ordinary intake accepted through the combined demo-and-staff boundary, Found Roll records provenance but does not queue model work until staff explicitly authorizes a derived preview. At that point the service—not the browser—commits the outbox command and queues the bounded background investigation. A Case Analyst built with Google ADK and Gemini compares that authorized multimodal evidence, searches the three custodian adapters, and proposes the next evidence action.
 
 The system deliberately refuses to accept a visual-only match. In the camera-pouch case it asks the claimant one non-leading question about a staff-only serial attribute, without exposing candidate images or the expected answer. The claimant receives a one-time link bound to that case version and expiry. Its raw value exists only in a scrubbed URL fragment and tab memory; the service persists a keyed digest. Answer submission consumes the link, a wrong answer rotates it to the new case version, and expiry or replay fails closed. Deterministic code accepts or rejects that claim evidence. Because the item contains valuable electronics, a separately authenticated staff identity attestation and supervisor approval are still required.
 
@@ -34,7 +34,7 @@ The protected staff workspace keeps three reusable credentials in memory and sep
 
 ## Why it is agentic
 
-Found Roll is not a chat interface wrapped around image similarity. The workflow wakes on an intake event, gathers evidence through permission-scoped tools, searches multiple authorized systems, determines whether the current evidence is insufficient, and proposes the smallest permitted next question for the deterministic policy-selected candidate packet. It pauses for claimant evidence and accountable human approval, then resumes the workflow, dispatches retryable work, and reconciles the remote simulator result into an application state.
+Found Roll is not a chat interface wrapped around image similarity. After an ordinary intake's staff-authorized derived preview is created, the service automatically enqueues a bounded background workflow with a durable outbox and named Cloud Task; the browser only observes/polls it. The workflow gathers evidence through permission-scoped tools, searches multiple authorized systems, determines whether the current evidence is insufficient, and proposes the smallest permitted next question for the deterministic policy-selected candidate packet. It pauses for claimant evidence and accountable human approval, then resumes the workflow, dispatches retryable work, and reconciles the remote simulator result into an application state.
 
 The authority boundary is the key design decision. Gemini can inspect evidence and propose an investigation step. It cannot see the expected private answer, accept a claim, attest identity, approve a handoff, issue or consume credentials, or write custody state. Typed policy and state-machine code own those actions.
 
@@ -49,16 +49,16 @@ The canonical cloud architecture uses:
 - one Cloud Run service for the Found Roll API, deterministic policy/custody engine, and authenticated Cloud Tasks handler;
 - a second Cloud Run service for the disclosed custodian and relay simulator;
 - Firestore for passports, versions, idempotency records, outbox rows, and application-enforced append-only events;
-- Cloud Storage for restricted originals and separately derived previews, with retry-safe idempotency and workflow-epoch selection so only the latest complete current-run pair reaches the staff workspace or model;
+- Cloud Storage for restricted originals and separately derived previews, with retry-safe idempotency and workflow-epoch selection so the staff workspace selects only the latest complete current-run pair while an ordinary-intake model command freezes its triggering authorized pair;
 - Cloud Tasks with deterministic names, opaque three-field bodies, Google-signed OIDC delivery, and payload-free production publication receipts (the local inline adapter alone returns its opaque body for explicit delivery);
 - eight Secret Manager resources for the digest pepper, demo access, admin recovery, staff role, supervisor approval, simulator API, simulator token hashing, and callback HMAC; and
 - Cloud Logging for redacted operational events and correlation IDs, with prompt, answer, token, signed-URL, and media capture disabled.
 
-Remote reservation and release use an outbox/saga pattern. The state request and outbox row commit together; a retry-safe dispatcher creates a named task; the task calls the authenticated simulator contract; and a second transaction validates the returned attestation before moving custody. Evidence upload uses the case workflow epoch, content fingerprint, consent decision, and idempotency key so a response-loss retry returns the same original/preview pair while a conflict fails closed. A stale state version, stale eTag, stale evidence epoch, ambiguous remote result, expired credential, or replay cannot advance the case.
+Remote reservation and release use an outbox/saga pattern. The state request and outbox row commit together; a retry-safe dispatcher creates a named task; the task calls the authenticated simulator contract; and a second transaction validates the returned attestation before moving custody. For a newly accepted ordinary intake, the authorized evidence-upload response contains the server-created analysis receipt; retries rejoin that command rather than minting a second one. Evidence upload uses the case workflow epoch, content fingerprint, consent decision, and idempotency key so a response-loss retry returns the same original/preview pair while a conflict fails closed. A stale state version, stale eTag, stale evidence epoch, ambiguous remote result, expired credential, or replay cannot advance the case.
 
-## What is real in the canonical demo
+## What the final canonical demo must prove
 
-The claims below describe the frozen `v1.0.0` release and must agree with the five canonical run receipts and the continuous demo take. If the release verifier does not pass, do not publish this section.
+The checks below are final-release acceptance criteria, not claims about the current untagged branch. They must agree with five canonical run receipts and the continuous demo take before public release material is published.
 
 - Live Gemini evidence analysis through the pinned model and a traceable Google ADK tool trajectory.
 - Two separately deployed Cloud Run revisions and a real HTTPS call between the Found Roll service and simulator.
@@ -66,7 +66,7 @@ The claims below describe the frozen `v1.0.0` release and must agree with the fi
 - Deterministic policy decisions, expected-version checks, idempotency, one-time credential consumption, callback verification, replay handling, and final event-manifest verification.
 - A fresh canonical case that begins from reset and ends in `CLOSED` without manual database repair.
 
-The canonical recording uses that prepared frozen case. It shows the safety/no-upload screen and cancels it, then starts analysis on the already reset case and its current-epoch uploaded preview; it does not create a second dynamic intake after preparation.
+The canonical recording uses a deliberately unarmed prepared fixture so reset, evidence provenance, and its filmed passport remain on one workflow epoch. It shows the safety/no-upload screen and then starts analysis on that already reset case. That controlled fixture action must not be described as the ordinary-intake trigger: for ordinary staff-created intakes, the server queues analysis automatically after a current-epoch authorized preview.
 
 ## What is simulated
 
@@ -84,14 +84,14 @@ Grand Hall, Metro Loop, Northport Air, their inventory items, the claimant route
 
 ## Accomplishments
 
-The local measurements below are deliberately separate from live cloud proof. The five canonical receipts establish execution and boundary behavior, not model accuracy or general reliability; never convert deterministic fixture metrics into broader Gemini/ADK claims.
+The local measurements below are deliberately separate from live cloud proof. If a frozen release later completes five canonical receipts, they establish execution and boundary behavior rather than model accuracy or general reliability; never convert deterministic fixture metrics into broader Gemini/ADK claims.
 
 - Fresh component-suite counts must be copied from the frozen release receipt rather than this draft.
 - The frozen deterministic evaluation passed **15/15 synthetic scenarios**, with no failed scenario.
 - Deterministic local candidate retrieval in the top three was **2/2 as a descriptive proxy**, but the two-fixture sample is below the required minimum of 12 and passes no threshold.
 - Usefulness was **3/3 among the only genuinely question-bearing packets**, also only a descriptive insufficient-sample proxy. FR-003 and FR-010 produced no candidate packet/question and are not counted. Canonical retrieval and usefulness thresholds remain **INCOMPLETE**.
 - Prompt-injection text remained inert and could not authorize a claim. An expired claimant link returned `claim_link_expired` with zero event delta, and handoff-token replay returned `token_replayed` with zero event delta.
-- The local run made **0 Gemini calls and 0 Google Cloud calls**. Separately, the frozen release completed **five consecutive live canonical workflows** from authenticated reset to `CLOSED`; each bound the same commit, frontend artifact, app/simulator revisions, live Gemini/ADK trajectory, deliberate task and callback replay proofs, and full Cloud Logging privacy window.
+- The local run made **0 Gemini calls and 0 Google Cloud calls**. A final frozen release must complete **five consecutive live canonical workflows** from authenticated reset to `CLOSED`, binding one commit, frontend artifact, app/simulator revisions, live Gemini/ADK trajectory, deliberate task and callback replay proofs, and a full Cloud Logging privacy window before those execution claims are published.
 
 The result we value most is architectural: the most impressive part of the agent is where it stops. It can carry a messy investigation forward, but evidence acceptance, identity, approval, and custody remain explicit and inspectable.
 
@@ -144,21 +144,21 @@ Fixture hashes recorded during drafting; regenerate and compare them at release 
 | `public/assets/pouch-interior.jpg` | `5a2dc95289981af12a057c3754d5df6140b67de842dc803a5092f5e9d1fb6b1e` |
 | `public/assets/pouch-rear.jpg` | `1768db7c0249316c55877a73d91bd09689118f800e7a40ff339d2cfea6a6b159` |
 
-## Final links
+## Release links to complete only after the freeze gate
 
 | Submission field | Final value |
 | --- | --- |
-| Hosted project | [Found Roll Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough), a public read-only redacted synthetic case; the protected flow is shown in the continuous demo |
-| Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll), anonymously reachable at the published `v1.0.0` tag |
+| Hosted project | [Found Roll Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough), a current public read-only redacted synthetic case; the protected flow belongs in the final continuous demo |
+| Repository and judge access | [Public MIT repository](https://github.com/mahmoudelfeelig/found-roll); the immutable submission tag is pending the freeze gate |
 | Architecture | [Architecture and authority boundaries](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture.md) and the [rendered diagram](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/architecture-diagram.png) |
 | Evaluation report | [Local evaluation with explicit canonical limits](https://github.com/mahmoudelfeelig/found-roll/blob/main/docs/evaluation.md) |
-| Demo video | Supplied through Devpost's dedicated video field as the privacy-reviewed public YouTube/Vimeo player, verified under four minutes |
-| Submitted commit | The immutable commit resolved by the public `v1.0.0` Git tag |
-| Cloud Run revisions | The exact app and simulator revisions bound by all five private canonical receipts and shown in the continuous demo |
-| Fixture version | `camera-pouch-v1`, bound to the frozen fixture digest in the release record |
+| Demo video | Pending: publish a privacy-reviewed public YouTube/Vimeo player under four minutes, then supply it through Devpost's dedicated video field |
+| Submitted commit | Pending the immutable public tag created after the full verifier passes |
+| Cloud Run revisions | Pending five fresh canonical receipts and the continuous demo |
+| Fixture version | `camera-pouch-v1`; bind its final digest in the frozen release record |
 | Eligibility and story provenance | Confirmed by the entrant: entrant/team eligibility, official rules, ownership, required authorizations, new-project status, and research-informed story mode. |
-| Google Cloud readiness | Dedicated active `Free trial account` project with remaining credit/time, required APIs/IAM/quota, EUR 10 Cloud Run and EUR 5 Agent Platform caps, and no paid activation or upgrade, verified by the release gate |
+| Google Cloud readiness | Must be reverified by the release gate: active Free Trial account, required APIs/IAM/quota, EUR 10 Cloud Run and EUR 5 Agent Platform caps, with no paid activation or upgrade |
 
 ## Pre-submit consistency check
 
-The README, hosted UI, demo narration, architecture diagram, evaluation report, and this Devpost copy agree on the release boundary: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and only the measured results from `v1.0.0`. The video URL belongs in Devpost's dedicated field after its separate privacy and runtime checks; the final Devpost submission remains an entrant action.
+The README, hosted UI, demo narration, architecture diagram, evaluation report, and this draft agree on the intended release boundary: one bounded Case Analyst; deterministic release authority; three fictional custodians; a separately deployed simulated relay; case/version-scoped one-time claimant links; distinct demo, staff, supervisor, and terminal-only admin boundaries; live canonical Gemini/ADK/Google Cloud execution; synthetic fixture data; research-informed rather than first-person inspiration; no ownership or physical-possession claim; and only measurements actually bound to the final tag. The video URL belongs in Devpost's dedicated field after its separate privacy and runtime checks; the final Devpost submission remains an entrant action.

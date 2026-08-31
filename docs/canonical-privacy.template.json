@@ -1,5 +1,5 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "kind": "found-roll-canonical-privacy",
   "status": "BLOCKED",
   "submitted_commit": "<submitted-commit>",
@@ -13,5 +13,7 @@
   "unresolved_findings": -1,
   "binary_media_review_confirmed": false,
   "raw_sensitive_content_included": false,
-  "log_trace_ranges_covered": false
+  "log_trace_ranges_covered": false,
+  "detail_path": "artifacts/private/canonical-privacy-detail.json",
+  "detail_sha256": "<canonical-privacy-detail-sha256>"
 }

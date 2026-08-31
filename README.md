@@ -9,6 +9,7 @@ Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmou
 ## What the demo proves
 
 - One report searches the fictional Grand Hall, Metro Loop, and Northport Air inventories.
+- An ordinary intake is armed only after the combined demo-and-staff boundary accepts it. Once staff explicitly authorizes a derived model preview, the service itself commits the bounded-analysis outbox command for that immutable pair and queues it; the browser only observes and polls the result. The public manual-analysis route refuses armed intakes.
 - Visual similarity alone is refused. The deterministic custody engine fixes the eligible candidate packet; the bounded analyst inspects it and proposes one non-leading question, but cannot accept a claim or mutate custody.
 - The valuable camera-pouch fixture needs an exact private serial fragment, a staff identity attestation, and supervisor approval.
 - Reservation and release use an outbox boundary, expected versions, remote eTags, and idempotency keys.
@@ -28,6 +29,12 @@ The private claimant proof page exposes one non-leading question and no candidat
 
 The hosted browser has three reusable runtime credential boundaries, not one shared role: `X-Found-Roll-Demo-Token` for the synthetic demo workflow, `X-Found-Roll-Staff-Token` for production rich reads plus evidence, identity attestation, and release confirmation, and `X-Found-Roll-Supervisor-Token` for approval. Intake, claimant-link issuance, and duplicate release-task delivery require both the demo and staff credentials. Before any role is shown as loaded, one strict, non-mutating probe validates all three values—even in development—and returns the configured staff and supervisor actor IDs. The server records those exact IDs without adding prefixes; conflicting optional legacy actor fields are rejected. All credentials and resulting private session state remain in memory only and are cleared together. Admin reset/recovery authority is never accepted by the browser. The claimant uses a separate purpose-built link projection rather than a staff passport response.
 
+## Judge testing
+
+The public [Judge Walkthrough](https://found-roll-app-1061926987746.us-central1.run.app/?view=walkthrough) is the quickest no-credential check: it proves that the hosted root is read-only, redacted, and visually grounded in a closed synthetic case. It cannot mutate a case, reveal protected media, or stand in for the protected workflow.
+
+For a free local review, install the locked dependencies described below and run `npm test` plus `service\.venv\Scripts\python.exe -m pytest service\tests`. Those checks exercise the deterministic fixture, evidence/consent boundaries, auto-queue contract, state transitions, retries, and privacy surfaces without Google Cloud credentials, paid APIs, user media, or a billing account. They prove local contracts only; live Google Cloud claims require a separately frozen tagged release and its private evidence gate.
+
 ## Local web prototype
 
 Requirements: Node.js 24 and npm.
@@ -39,7 +46,11 @@ npm run dev -- --host 127.0.0.1
 
 The root defaults to the public Judge Walkthrough and uses only the non-mutating public `/api/v1/healthz` and `/api/v1/judge-walkthrough` reads; if the read-only service projection is unavailable, it shows an unavailable state rather than private fixture data. The protected staff workspace is at `?view=staff`. In a combined app image it probes `/api/v1/healthz` and distinguishes fixture from live Vertex ADK mode. The namespaced route avoids the Google Frontend 404 observed at the exact `/healthz` path on the deployed Cloud Run service; `/healthz` remains available for container-local probes.
 
-The deterministic synthetic answer remains in server-side fixture/test material for reproducibility; it is not compiled into the browser. In connected mode, the operator loads the separate demo, staff, and supervisor runtime credentials through the staff control. The browser proves all three through the strict runtime-role probe, then sends each only to its matching boundary and never stores them beyond the tab. Empty, partial, or rejected configuration clears credentials, claimant links, handoff tokens, pending intake state, task receipts, manifest data, and private evidence URLs. The operator then uses the action strip to issue a case/version-scoped claimant link, submit evidence through that private link, record the staff identity attestation, obtain supervisor approval, reserve Relay Post, present both handoff credentials, complete the simulated delivery, and queue one duplicate task delivery. A consumed credential is rejected; the duplicate completed delivery is acknowledged idempotently without appending another event.
+The deterministic synthetic answer remains in server-side fixture/test material for reproducibility; it is not compiled into the browser. In connected mode, the operator loads the separate demo, staff, and supervisor runtime credentials through the staff control. The browser proves all three through the strict runtime-role probe, then sends each only to its matching boundary and never stores them beyond the tab.
+
+Empty, partial, or rejected configuration clears credentials, claimant links, handoff tokens, pending intake state, task receipts, manifest data, and private evidence URLs. For an ordinary intake, the service queues the bounded analyst only after staff authorizes the derived preview; the browser receives the queue receipt and observes it rather than creating an analysis job itself.
+
+The operator then uses the action strip to issue a case/version-scoped claimant link, submit evidence through that private link, record the staff identity attestation, obtain supervisor approval, reserve Relay Post, present both handoff credentials, complete the simulated delivery, and queue one duplicate task delivery. A consumed credential is rejected; the duplicate completed delivery is acknowledged idempotently without appending another event.
 
 The intake safety stop is also deterministic and tenant-aware. Passports or government IDs, payment cards, access badges, medication, suspicious packages, and unknown sensitive categories receive category-specific instructions routed to the selected custodian's specialist desk. Those branches expose no upload control, make no network request, create no case, and call no model.
 

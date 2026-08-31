@@ -37,9 +37,9 @@ sequenceDiagram
     participant C as Claimant proof
     participant R as SIMULATED relay
 
-    S->>A: Safe intake with idempotency key
+    S->>A: Ordinary intake plus staff-authorized preview
     A->>F: RECEIVED then EVIDENCE_READY
-    A->>F: ANALYZING plus outbox row
+    A->>F: Service auto-queues ANALYZING plus outbox row
     A->>T: Named opaque task with case_id and outbox_id
     T->>A: OIDC-authenticated /tasks/outbox
     A->>G: Authorized evidence packet
@@ -66,7 +66,7 @@ sequenceDiagram
 
 Cloud Tasks and remote callbacks are treated as at-least-once. A transaction writes the requested transition and deterministic outbox record together. The named task carries opaque identifiers only. Cloud publication and replay receipts expose the task name/status but no body; the local inline adapter may return the same three-field opaque body so the development client can deliver it explicitly. A duplicate completed task updates its replay audit fields and returns `replayed=true` without appending a second custody event; an exact duplicate callback returns its prior accepted result, also without a second event. A stale case version, stale remote eTag, missing or invalid attestation, or unknown remote outcome cannot advance the workflow and instead enters a review or reconciliation path.
 
-For the canonical recording, the authenticated preparation script performs the reset and current-epoch evidence upload before the browser opens. The presenter demonstrates the local safety/no-upload branch and cancels it, then starts analysis on that already prepared frozen case. This keeps reset, evidence provenance, and the filmed passport on one workflow epoch instead of silently switching to a dynamically created intake.
+For an ordinary intake, only the combined demo-and-staff boundary can arm automatic analysis, and only a complete current-epoch `MODEL_AUTHORIZED` preview can trigger it. The browser receives the resulting queue receipt and polls; it does not create the analysis job. For the canonical recording, the authenticated preparation script deliberately retains an unarmed fixture, performs the reset and current-epoch evidence upload before the browser opens, and then starts analysis explicitly. This keeps reset, evidence provenance, and the filmed passport on one workflow epoch instead of silently switching to a dynamically created intake; it must not be represented as the ordinary-intake auto-queue proof.
 
 ## Custody state model
 
@@ -109,7 +109,7 @@ Visual similarity never reaches `CLAIM_EVIDENCE_ACCEPTED`. For the valuable came
 | Public/coarse | Item category, broad color/material, coarse found zone, approximate time window | Authorized staff and the bounded search adapter; only deliberately selected fields may reach claimant copy | Firestore fields or derived preview; no restricted answer |
 | Restricted claim evidence | Serial fragment digest, exact identifying mark, staff-only detail image | Custody service and authorized staff; the model receives only an attribute identifier when possible | Restricted Firestore field or private Cloud Storage object; never logged or placed in a task payload |
 | Original media | Intake image, staff detail image, provenance | Authorized staff service path only | Private Cloud Storage object with generation and SHA-256 recorded |
-| Derived media | EXIF-stripped preview or crop | Authenticated staff UI and model request for the current case | Separate object linked to its source digest and workflow epoch; only the latest complete current-epoch pair is active; never overwrite the original |
+| Derived media | EXIF-stripped preview or crop | Authenticated staff UI and a model request bound to an authorized pair | Separate object linked to its source digest and workflow epoch; the staff UI selects the latest complete current-epoch pair, while an ordinary-intake command freezes one authorized pair; never overwrite the original |
 | Identity evidence | Method, staff actor, outcome, timestamp | Authorized staff and manifest reviewer | Attestation metadata only; the demo stores no ID image |
 | Credential | Claimant/custodian one-time value | Holder at issuance or presentation | Only an HMAC digest is persisted; short expiry and one-time consumption |
 

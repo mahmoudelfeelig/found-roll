@@ -161,6 +161,13 @@ const expectedContractVersions = {
   output_schema: "found-roll-analysis-proposal-v1",
   policy: "found-roll-release-v1",
 };
+const canonicalPrivacyScannerTargets = Object.freeze([
+  "canonical-preparation-receipts",
+  "canonical-run-receipts",
+  "canonical-chain-audits",
+  "canonical-log-export-summaries",
+  "frozen-public-media",
+]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -3361,6 +3368,41 @@ function canonicalJsonBuffer(value) {
   return Buffer.from(serialized, "utf8");
 }
 
+function canonicalPrivacyWorkflowEvidenceSha256(runReceipt) {
+  if (
+    !isPlainObject(runReceipt)
+    || !isPlainObject(runReceipt.privacy)
+    || !Object.hasOwn(runReceipt.privacy, "receipt_sha256")
+    || !Object.hasOwn(runReceipt.privacy, "unresolved_findings")
+    || !Object.hasOwn(runReceipt.privacy, "binary_media_review_confirmed")
+    || typeof runReceipt.privacy.receipt_sha256 !== "string"
+    || !Number.isSafeInteger(runReceipt.privacy.unresolved_findings)
+    || typeof runReceipt.privacy.binary_media_review_confirmed !== "boolean"
+  ) {
+    return null;
+  }
+  // A final run binds the compact privacy receipt, which binds this manifest; hashing the
+  // final run bytes here would create a digest cycle. Preserve every other run field and
+  // normalize only the known finalizer-owned pending values before hashing.
+  const normalized = {
+    ...runReceipt,
+    status: "BLOCKED",
+    canonical: false,
+    privacy: {
+      ...runReceipt.privacy,
+      receipt_sha256: "0".repeat(64),
+      unresolved_findings: -1,
+      binary_media_review_confirmed: false,
+    },
+    clean_browser_verified: false,
+  };
+  try {
+    return sha256(canonicalJsonBuffer(normalized));
+  } catch {
+    return null;
+  }
+}
+
 function eventUnsignedForHash(event) {
   const unsigned = { ...event };
   delete unsigned.event_hash;
@@ -3611,7 +3653,685 @@ function validateChainAudit(audit, binding, runReceipt, preparationReceipt, rele
   }
 }
 
-function validateCanonicalPrivacyReceipt(receipt, runBindings, releaseRecord, failures) {
+function orderedCanonicalRunBindings(runBindings) {
+  return Array.isArray(runBindings)
+    ? [...runBindings].sort((left, right) => Number(left?.ordinal) - Number(right?.ordinal))
+    : [];
+}
+
+function validateCanonicalPrivacyScannerInputManifest(manifest, detail, orderedBindings, runReceipts, expectedRunIds, failures) {
+  const base = "canonical_privacy_scanner_input_manifest";
+  if (!manifest) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base} must be present and hash-bound by the privacy detail.`);
+    return;
+  }
+  if (!checkObject(manifest, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "submitted_commit",
+    "app_revision",
+    "simulator_revision",
+    "audit_window",
+    "run_inputs",
+    "scan_targets",
+    "input_count",
+  ], failures)) return;
+  for (const [key, expected] of Object.entries({
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-scanner-input-manifest",
+    status: "PASS",
+  })) requireReceiptValue(manifest, key, expected, base, failures);
+  requireIdentifier(manifest.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
+  requireIdentifier(manifest.app_revision, `${base}.app_revision`, failures);
+  requireIdentifier(manifest.simulator_revision, `${base}.simulator_revision`, failures);
+  if (
+    String(manifest.submitted_commit || "").toLowerCase() !== String(detail?.submitted_commit || "").toLowerCase()
+    || manifest.app_revision !== detail?.app_revision
+    || manifest.simulator_revision !== detail?.simulator_revision
+  ) {
+    addFailure(failures, "RECEIPT_BINDING", `${base} must bind the detail's exact commit and canonical revisions.`);
+  }
+  if (checkObject(manifest.audit_window, `${base}.audit_window`, ["started_at", "completed_at"], failures)) {
+    const startedValid = requireUtcTimestamp(manifest.audit_window.started_at, `${base}.audit_window.started_at`, failures);
+    const completedValid = requireUtcTimestamp(manifest.audit_window.completed_at, `${base}.audit_window.completed_at`, failures);
+    if (
+      !startedValid
+      || !completedValid
+      || manifest.audit_window.started_at !== detail?.audit_window?.started_at
+      || manifest.audit_window.completed_at !== detail?.audit_window?.completed_at
+    ) {
+      addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base}.audit_window must exactly match the privacy detail's bounded audit interval.`);
+    }
+  }
+  if (!Array.isArray(manifest.run_inputs) || manifest.run_inputs.length !== 5 || orderedBindings.length !== 5) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base}.run_inputs must contain the exact five canonical preparation/run/chain inputs in ordinal order.`);
+  } else {
+    manifest.run_inputs.forEach((input, index) => {
+      const fieldPath = `${base}.run_inputs[${index}]`;
+      if (!checkObject(input, fieldPath, [
+        "ordinal",
+        "run_id",
+        "preparation_path",
+        "preparation_sha256",
+        "run_path",
+        "workflow_evidence_sha256",
+        "chain_audit_path",
+        "chain_audit_sha256",
+      ], failures)) return;
+      const expected = orderedBindings[index];
+      const runReceipt = (runReceipts || []).find((candidate) => candidate?.run_id === expected?.run_id);
+      const workflowEvidenceSha256 = canonicalPrivacyWorkflowEvidenceSha256(runReceipt);
+      if (!workflowEvidenceSha256) {
+        addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${fieldPath} requires a loaded canonical run with the complete nested privacy fields needed for cycle-free workflow evidence hashing.`);
+      }
+      requireIdentifier(input.run_id, `${fieldPath}.run_id`, failures);
+      for (const key of ["preparation_path", "run_path", "chain_audit_path"]) {
+        requireIdentifier(input[key], `${fieldPath}.${key}`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+      }
+      for (const key of ["preparation_sha256", "workflow_evidence_sha256", "chain_audit_sha256"]) {
+        requireSha256(input[key], `${fieldPath}.${key}`, failures);
+        if (typeof input[key] === "string" && input[key] !== input[key].toLowerCase()) {
+          addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${fieldPath}.${key} must be a lowercase SHA-256 digest.`);
+        }
+      }
+      if (
+        input.ordinal !== expected?.ordinal
+        || input.run_id !== expected?.run_id
+        || input.preparation_path !== expected?.preparation_path
+        || String(input.preparation_sha256 || "").toLowerCase() !== String(expected?.preparation_sha256 || "").toLowerCase()
+        || input.run_path !== expected?.run_path
+        || !workflowEvidenceSha256
+        || String(input.workflow_evidence_sha256 || "").toLowerCase() !== workflowEvidenceSha256
+        || input.chain_audit_path !== expected?.chain_audit_path
+        || String(input.chain_audit_sha256 || "").toLowerCase() !== String(expected?.chain_audit_sha256 || "").toLowerCase()
+      ) {
+        addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${fieldPath} must exactly bind its canonical preparation, run, and chain-audit evidence.`);
+      }
+    });
+  }
+  if (
+    !Array.isArray(manifest.scan_targets)
+    || manifest.scan_targets.length !== canonicalPrivacyScannerTargets.length
+    || manifest.scan_targets.some((target, index) => target !== canonicalPrivacyScannerTargets[index])
+    || new Set(manifest.scan_targets).size !== canonicalPrivacyScannerTargets.length
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base}.scan_targets must use the fixed canonical scanner target set.`);
+  } else {
+    manifest.scan_targets.forEach((target, index) => requireIdentifier(target, `${base}.scan_targets[${index}]`, failures));
+  }
+  const expectedInputCount = orderedBindings.length === 5 ? orderedBindings.length * 3 : null;
+  if (!Number.isSafeInteger(manifest.input_count) || manifest.input_count < 1 || manifest.input_count !== expectedInputCount) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base}.input_count must equal the fifteen fixed canonical evidence artifacts.`);
+  }
+  if (
+    !Array.isArray(expectedRunIds)
+    || expectedRunIds.length !== 5
+    || !Array.isArray(manifest.run_inputs)
+    || manifest.run_inputs.some((input, index) => input?.run_id !== expectedRunIds[index])
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_INPUT", `${base}.run_inputs must preserve the exact five canonical run IDs in ordinal order.`);
+  }
+}
+
+function validateCanonicalPrivacyScannerReport(report, detail, expectedRunIds, scannerInputManifest, failures) {
+  const base = "canonical_privacy_scanner_report";
+  if (!report) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base} must be present and hash-bound by the privacy detail.`);
+    return;
+  }
+  if (!checkObject(report, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "submitted_commit",
+    "app_revision",
+    "simulator_revision",
+    "audit_window",
+    "run_ids",
+    "scanner_input_manifest_path",
+    "scanner_input_manifest_sha256",
+    "scanner_input_count",
+    "scanned_file_count",
+    "scanned_byte_count",
+    "finding_count",
+    "unsupported_file_count",
+    "skipped_large_file_count",
+    "decode_replacement_count",
+    "raw_sensitive_content_included",
+    "finding_values_included",
+  ], failures)) return;
+  for (const [key, expected] of Object.entries({
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-scanner-report",
+    status: "PASS",
+    finding_count: 0,
+    unsupported_file_count: 0,
+    skipped_large_file_count: 0,
+    decode_replacement_count: 0,
+    raw_sensitive_content_included: false,
+    finding_values_included: false,
+  })) requireReceiptValue(report, key, expected, base, failures);
+  requireIdentifier(report.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
+  requireIdentifier(report.app_revision, `${base}.app_revision`, failures);
+  requireIdentifier(report.simulator_revision, `${base}.simulator_revision`, failures);
+  if (
+    String(report.submitted_commit || "").toLowerCase() !== String(detail?.submitted_commit || "").toLowerCase()
+    || report.app_revision !== detail?.app_revision
+    || report.simulator_revision !== detail?.simulator_revision
+  ) {
+    addFailure(failures, "RECEIPT_BINDING", `${base} must match the bound privacy detail commit and canonical revisions.`);
+  }
+  if (checkObject(report.audit_window, `${base}.audit_window`, ["started_at", "completed_at"], failures)) {
+    const startedValid = requireUtcTimestamp(report.audit_window.started_at, `${base}.audit_window.started_at`, failures);
+    const completedValid = requireUtcTimestamp(report.audit_window.completed_at, `${base}.audit_window.completed_at`, failures);
+    if (
+      !startedValid
+      || !completedValid
+      || report.audit_window.started_at !== detail?.audit_window?.started_at
+      || report.audit_window.completed_at !== detail?.audit_window?.completed_at
+    ) {
+      addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base}.audit_window must exactly match the privacy detail's bounded audit interval.`);
+    }
+  }
+  requireIdentifier(report.scanner_input_manifest_path, `${base}.scanner_input_manifest_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(report.scanner_input_manifest_sha256, `${base}.scanner_input_manifest_sha256`, failures);
+  if (
+    report.scanner_input_manifest_path !== detail?.scanner_input_manifest_path
+    || typeof report.scanner_input_manifest_sha256 !== "string"
+    || report.scanner_input_manifest_sha256 !== report.scanner_input_manifest_sha256.toLowerCase()
+    || report.scanner_input_manifest_sha256 !== detail?.scanner_input_manifest_sha256
+    || !Number.isSafeInteger(report.scanner_input_count)
+    || report.scanner_input_count < 1
+    || report.scanner_input_count !== detail?.scanner_input_count
+    || report.scanner_input_count !== scannerInputManifest?.input_count
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base} must bind the exact fixed scanner-input manifest path, digest, and count.`);
+  }
+  if (
+    !Array.isArray(report.run_ids)
+    || expectedRunIds.length !== 5
+    || report.run_ids.length !== 5
+    || report.run_ids.some((runId, index) => runId !== expectedRunIds[index])
+    || new Set(report.run_ids).size !== 5
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base}.run_ids must preserve the five canonical run IDs in ordinal order.`);
+  } else {
+    report.run_ids.forEach((runId, index) => requireIdentifier(runId, `${base}.run_ids[${index}]`, failures));
+  }
+  for (const key of [
+    "scanned_file_count",
+    "scanned_byte_count",
+    "finding_count",
+    "unsupported_file_count",
+    "skipped_large_file_count",
+    "decode_replacement_count",
+  ]) {
+    if (!Number.isSafeInteger(report[key]) || report[key] < 0) {
+      addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base}.${key} must be a non-negative safe integer.`);
+    }
+  }
+  if (report.scanned_file_count < 1 || report.scanned_byte_count < 1) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base} must prove a non-empty bounded scanner input.`);
+  }
+  if (Number.isSafeInteger(scannerInputManifest?.input_count) && report.scanned_file_count < scannerInputManifest.input_count) {
+    addFailure(failures, "CANONICAL_PRIVACY_SCANNER_REPORT", `${base}.scanned_file_count must cover every manifest-bound canonical evidence artifact.`);
+  }
+}
+
+function validateCanonicalPrivacyExportSummary(summary, expected, failures) {
+  const base = expected.fieldPath;
+  if (!summary) {
+    addFailure(failures, "CANONICAL_PRIVACY_EXPORT", `${base} must be present and hash-bound by its canonical run.`);
+    return;
+  }
+  if (!checkObject(summary, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "submitted_commit",
+    "export_index",
+    "ordinal",
+    "run_id",
+    "app_revision",
+    "simulator_revision",
+    "audit_window",
+    "export_content_sha256",
+    "structured_log_count",
+    "request_log_count",
+    "trace_count",
+    "text_payload_count",
+  ], failures)) return;
+  for (const [key, value] of Object.entries({
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-log-export-summary",
+    status: "PASS",
+    export_index: expected.exportIndex,
+    ordinal: expected.ordinal,
+    run_id: expected.runId,
+    app_revision: expected.appRevision,
+    simulator_revision: expected.simulatorRevision,
+    structured_log_count: expected.structuredLogCount,
+    request_log_count: expected.requestLogCount,
+    trace_count: expected.traceCount,
+    text_payload_count: 0,
+  })) requireReceiptValue(summary, key, value, base, failures);
+  requireIdentifier(summary.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
+  requireSha256(summary.export_content_sha256, `${base}.export_content_sha256`, failures);
+  if (
+    typeof summary.export_content_sha256 !== "string"
+    || summary.export_content_sha256 !== summary.export_content_sha256.toLowerCase()
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_EXPORT", `${base}.export_content_sha256 must be a lowercase SHA-256 digest.`);
+  }
+  if (String(summary.submitted_commit || "").toLowerCase() !== String(expected.submittedCommit || "").toLowerCase()) {
+    addFailure(failures, "RECEIPT_BINDING", `${base}.submitted_commit must match the bound privacy detail.`);
+  }
+  if (checkObject(summary.audit_window, `${base}.audit_window`, ["started_at", "completed_at"], failures)) {
+    const startedValid = requireUtcTimestamp(summary.audit_window.started_at, `${base}.audit_window.started_at`, failures);
+    const completedValid = requireUtcTimestamp(summary.audit_window.completed_at, `${base}.audit_window.completed_at`, failures);
+    if (
+      !startedValid
+      || !completedValid
+      || summary.audit_window.started_at !== expected.auditWindow?.started_at
+      || summary.audit_window.completed_at !== expected.auditWindow?.completed_at
+    ) {
+      addFailure(failures, "CANONICAL_PRIVACY_EXPORT", `${base}.audit_window must exactly match its canonical run's bounded audit interval.`);
+    }
+  }
+}
+
+async function validateCanonicalPrivacyDetail(detail, receipt, runBindings, runReceipts, releaseRecord, frozenFileBindings, repoRoot, failures) {
+  const base = "canonical_privacy_detail";
+  if (!detail) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base} must be present and hash-bound by the compact privacy receipt.`);
+    return;
+  }
+  if (!checkObject(detail, base, [
+    "schema_version",
+    "kind",
+    "status",
+    "submitted_commit",
+    "app_revision",
+    "simulator_revision",
+    "run_ids",
+    "audit_window",
+    "scanner_input_manifest_path",
+    "scanner_input_manifest_sha256",
+    "scanner_input_count",
+    "runs",
+    "scanner_report_path",
+    "scanner_report_sha256",
+    "public_media",
+    "summary",
+  ], failures)) return;
+  for (const [key, expected] of Object.entries({
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-detail",
+    status: "PASS",
+  })) requireReceiptValue(detail, key, expected, base, failures);
+
+  requireIdentifier(detail.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
+  requireReceiptIdentifier(detail, "app_revision", base, failures);
+  requireReceiptIdentifier(detail, "simulator_revision", base, failures);
+  requireIdentifier(detail.scanner_input_manifest_path, `${base}.scanner_input_manifest_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(detail.scanner_input_manifest_sha256, `${base}.scanner_input_manifest_sha256`, failures);
+  requireIdentifier(detail.scanner_report_path, `${base}.scanner_report_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(detail.scanner_report_sha256, `${base}.scanner_report_sha256`, failures);
+  if (
+    detail.scanner_input_manifest_path !== "artifacts/private/canonical-privacy-scanner-input-manifest.json"
+    || typeof detail.scanner_input_manifest_sha256 !== "string"
+    || detail.scanner_input_manifest_sha256 !== detail.scanner_input_manifest_sha256.toLowerCase()
+    || !Number.isSafeInteger(detail.scanner_input_count)
+    || detail.scanner_input_count < 1
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base} must bind the fixed private scanner-input manifest with a positive count and lowercase SHA-256 digest.`);
+  }
+  if (
+    detail.scanner_report_path !== "artifacts/private/canonical-privacy-scanner-report.json"
+    || typeof detail.scanner_report_sha256 !== "string"
+    || detail.scanner_report_sha256 !== detail.scanner_report_sha256.toLowerCase()
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base} must bind the fixed private scanner report with a lowercase SHA-256 digest.`);
+  }
+
+  const releaseCommit = releaseRecord?.repository?.commit_sha;
+  if (
+    typeof detail.submitted_commit !== "string"
+    || typeof releaseCommit !== "string"
+    || detail.submitted_commit.toLowerCase() !== releaseCommit.toLowerCase()
+    || detail.submitted_commit.toLowerCase() !== String(receipt?.submitted_commit || "").toLowerCase()
+  ) {
+    addFailure(failures, "RECEIPT_BINDING", `${base}.submitted_commit must match the compact privacy receipt and release commit.`);
+  }
+
+  const expectedAppRevision = releaseRecord?.google_cloud?.canonical_revision_images?.app?.revision;
+  const expectedSimulatorRevision = releaseRecord?.google_cloud?.canonical_revision_images?.simulator?.revision;
+  if (detail.app_revision !== expectedAppRevision || detail.simulator_revision !== expectedSimulatorRevision) {
+    addFailure(failures, "RECEIPT_BINDING", `${base} must bind the exact canonical app and simulator revisions.`);
+  }
+
+  const orderedBindings = orderedCanonicalRunBindings(runBindings);
+  const expectedRunIds = orderedBindings.map((binding) => binding?.run_id);
+  if (orderedBindings.length !== 5 || detail.scanner_input_count !== orderedBindings.length * 3) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.scanner_input_count must equal the fifteen fixed canonical preparation/run/chain inputs.`);
+  }
+  const hasExactRunIds = (runIds, fieldPath) => {
+    if (!Array.isArray(runIds) || runIds.length !== 5) {
+      addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${fieldPath} must be an ordered array of exactly five canonical run identifiers.`);
+      return false;
+    }
+    let valid = true;
+    runIds.forEach((runId, index) => {
+      if (!requireIdentifier(runId, `${fieldPath}[${index}]`, failures)) valid = false;
+    });
+    if (
+      orderedBindings.length !== 5
+      || expectedRunIds.some((runId, index) => runIds[index] !== runId)
+      || new Set(runIds).size !== 5
+    ) {
+      addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${fieldPath} must preserve the exact five run IDs in ordinal order.`);
+      valid = false;
+    }
+    return valid;
+  };
+  hasExactRunIds(detail.run_ids, `${base}.run_ids`);
+  if (!Array.isArray(receipt?.run_ids) || receipt.run_ids.length !== detail.run_ids?.length || receipt.run_ids.some((runId, index) => runId !== detail.run_ids[index])) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.run_ids must match the compact privacy receipt in ordinal order.`);
+  }
+  const scannerInputManifest = await loadReceipt(
+    repoRoot,
+    detail.scanner_input_manifest_path,
+    detail.scanner_input_manifest_sha256,
+    "canonical_privacy_scanner_input_manifest",
+    failures,
+  );
+  validateCanonicalPrivacyScannerInputManifest(
+    scannerInputManifest,
+    detail,
+    orderedBindings,
+    runReceipts,
+    expectedRunIds,
+    failures,
+  );
+  const scannerReport = await loadReceipt(
+    repoRoot,
+    detail.scanner_report_path,
+    detail.scanner_report_sha256,
+    "canonical_privacy_scanner_report",
+    failures,
+  );
+  validateCanonicalPrivacyScannerReport(scannerReport, detail, expectedRunIds, scannerInputManifest, failures);
+
+  let auditWindowValid = false;
+  if (checkObject(detail.audit_window, `${base}.audit_window`, ["started_at", "completed_at"], failures)) {
+    const startedValid = requireUtcTimestamp(detail.audit_window.started_at, `${base}.audit_window.started_at`, failures);
+    const completedValid = requireUtcTimestamp(detail.audit_window.completed_at, `${base}.audit_window.completed_at`, failures);
+    if (startedValid && completedValid) {
+      const startedAt = Date.parse(detail.audit_window.started_at);
+      const completedAt = Date.parse(detail.audit_window.completed_at);
+      if (completedAt <= startedAt) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.audit_window.completed_at must follow started_at.`);
+      } else {
+        auditWindowValid = true;
+        const runWindows = (runReceipts || []).map((runReceipt) => ({
+          startedAt: Date.parse(runReceipt?.started_at_utc),
+          endedAt: Date.parse(runReceipt?.ended_at_utc),
+        }));
+        if (runWindows.length !== 5 || !runWindows.every((window) => Number.isFinite(window.startedAt) && Number.isFinite(window.endedAt))) {
+          addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.audit_window requires five loaded canonical run intervals.`);
+          auditWindowValid = false;
+        } else {
+          if (startedAt !== Math.min(...runWindows.map((window) => window.startedAt)) || completedAt !== Math.max(...runWindows.map((window) => window.endedAt))) {
+            addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.audit_window must exactly equal the earliest canonical start and latest canonical completion.`);
+            auditWindowValid = false;
+          }
+        }
+        const releaseCreatedAt = Date.parse(releaseRecord?.created_at_utc);
+        if (Number.isFinite(releaseCreatedAt) && completedAt > releaseCreatedAt) {
+          addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.audit_window.completed_at must not follow the release freeze.`);
+        }
+      }
+    }
+  }
+
+  let runTotals = null;
+  if (!Array.isArray(detail.runs) || detail.runs.length !== 5) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.runs must contain exactly five ordered per-run audit summaries.`);
+  } else {
+    const totals = {
+      structured_log_count: 0,
+      request_log_count: 0,
+      trace_count: 0,
+      text_payload_count: 0,
+    };
+    let complete = true;
+    for (let index = 0; index < detail.runs.length; index += 1) {
+      const run = detail.runs[index];
+      const runBase = `${base}.runs[${index}]`;
+      if (!checkObject(run, runBase, [
+        "ordinal",
+        "run_id",
+        "app_revision",
+        "simulator_revision",
+        "audit_window",
+        "first_export",
+        "second_export",
+        "structured_log_count",
+        "request_log_count",
+        "trace_count",
+        "text_payload_count",
+      ], failures)) {
+        complete = false;
+        continue;
+      }
+      const expectedBinding = orderedBindings[index];
+      if (run.ordinal !== expectedBinding?.ordinal || run.run_id !== expectedBinding?.run_id) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase} must preserve the exact canonical ordinal and run ID.`);
+        complete = false;
+      }
+      requireIdentifier(run.run_id, `${runBase}.run_id`, failures);
+      requireReceiptIdentifier(run, "app_revision", runBase, failures);
+      requireReceiptIdentifier(run, "simulator_revision", runBase, failures);
+      if (run.app_revision !== detail.app_revision || run.simulator_revision !== detail.simulator_revision) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase} must bind the detail's exact canonical revisions.`);
+        complete = false;
+      }
+      let runAuditWindowValid = false;
+      if (checkObject(run.audit_window, `${runBase}.audit_window`, ["started_at", "completed_at"], failures)) {
+        const startedValid = requireUtcTimestamp(run.audit_window.started_at, `${runBase}.audit_window.started_at`, failures);
+        const completedValid = requireUtcTimestamp(run.audit_window.completed_at, `${runBase}.audit_window.completed_at`, failures);
+        if (startedValid && completedValid) {
+          const startedAt = Date.parse(run.audit_window.started_at);
+          const completedAt = Date.parse(run.audit_window.completed_at);
+          const matchingRunReceipt = (runReceipts || []).find((runReceipt) => runReceipt?.run_id === expectedBinding?.run_id);
+          const canonicalStartedAt = Date.parse(matchingRunReceipt?.started_at_utc);
+          const canonicalCompletedAt = Date.parse(matchingRunReceipt?.ended_at_utc);
+          const detailStartedAt = Date.parse(detail.audit_window?.started_at);
+          const detailCompletedAt = Date.parse(detail.audit_window?.completed_at);
+          if (
+            completedAt <= startedAt
+            || !Number.isFinite(canonicalStartedAt)
+            || !Number.isFinite(canonicalCompletedAt)
+            || startedAt !== canonicalStartedAt
+            || completedAt !== canonicalCompletedAt
+            || (Number.isFinite(detailStartedAt) && startedAt < detailStartedAt)
+            || (Number.isFinite(detailCompletedAt) && completedAt > detailCompletedAt)
+          ) {
+            addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase}.audit_window must exactly equal its canonical run interval inside the shared bounded audit interval.`);
+            complete = false;
+          } else {
+            runAuditWindowValid = true;
+          }
+        }
+      }
+      for (const key of ["structured_log_count", "request_log_count", "trace_count", "text_payload_count"]) {
+        if (!Number.isSafeInteger(run[key]) || run[key] < 0) {
+          addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase}.${key} must be a non-negative safe integer.`);
+          complete = false;
+        } else {
+          totals[key] += run[key];
+        }
+      }
+      if (
+        run.structured_log_count < 1
+        || run.request_log_count < 1
+        || run.trace_count < 1
+        || run.text_payload_count !== 0
+      ) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase} must prove positive structured, request, and trace coverage with zero text payloads.`);
+        complete = false;
+      }
+      if (Number.isSafeInteger(run.request_log_count) && Number.isSafeInteger(run.trace_count) && run.request_log_count !== run.trace_count) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${runBase}.trace_count must cover every request log entry.`);
+        complete = false;
+      }
+      const validateExportBinding = (binding, key, expectedPath) => {
+        const bindingBase = `${runBase}.${key}`;
+        if (!checkObject(binding, bindingBase, ["path", "sha256"], failures)) {
+          complete = false;
+          return null;
+        }
+        const validPath = requireIdentifier(binding.path, `${bindingBase}.path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+        const validDigest = requireSha256(binding.sha256, `${bindingBase}.sha256`, failures);
+        if (
+          !validPath
+          || !validDigest
+          || binding.path !== expectedPath
+          || typeof binding.sha256 !== "string"
+          || binding.sha256 !== binding.sha256.toLowerCase()
+        ) {
+          addFailure(failures, "CANONICAL_PRIVACY_EXPORT", `${bindingBase} must bind the exact private export-summary path with a lowercase SHA-256 digest.`);
+          complete = false;
+        }
+        return binding;
+      };
+      const ordinal = expectedBinding?.ordinal;
+      const firstExportBinding = validateExportBinding(
+        run.first_export,
+        "first_export",
+        `artifacts/private/canonical-privacy-export-${ordinal}-first.json`,
+      );
+      const secondExportBinding = validateExportBinding(
+        run.second_export,
+        "second_export",
+        `artifacts/private/canonical-privacy-export-${ordinal}-second.json`,
+      );
+      const exportExpectation = {
+        ordinal,
+        runId: expectedBinding?.run_id,
+        appRevision: run.app_revision,
+        simulatorRevision: run.simulator_revision,
+        auditWindow: run.audit_window,
+        structuredLogCount: run.structured_log_count,
+        requestLogCount: run.request_log_count,
+        traceCount: run.trace_count,
+        submittedCommit: detail.submitted_commit,
+      };
+      const firstExport = firstExportBinding
+        ? await loadReceipt(repoRoot, firstExportBinding.path, firstExportBinding.sha256, `${runBase}.first_export_summary`, failures)
+        : null;
+      const secondExport = secondExportBinding
+        ? await loadReceipt(repoRoot, secondExportBinding.path, secondExportBinding.sha256, `${runBase}.second_export_summary`, failures)
+        : null;
+      validateCanonicalPrivacyExportSummary(firstExport, { ...exportExpectation, exportIndex: 1, fieldPath: `${runBase}.first_export_summary` }, failures);
+      validateCanonicalPrivacyExportSummary(secondExport, { ...exportExpectation, exportIndex: 2, fieldPath: `${runBase}.second_export_summary` }, failures);
+      if (
+        typeof firstExport?.export_content_sha256 !== "string"
+        || typeof secondExport?.export_content_sha256 !== "string"
+        || firstExport.export_content_sha256.toLowerCase() !== secondExport.export_content_sha256.toLowerCase()
+      ) {
+        addFailure(failures, "CANONICAL_PRIVACY_EXPORT", `${runBase} must bind two summaries with one exact stabilized export-content SHA-256 digest.`);
+        complete = false;
+      }
+      if (!runAuditWindowValid) complete = false;
+    }
+    if (complete) runTotals = totals;
+  }
+
+  const expectedPublicMediaPaths = requiredFrozenFilePaths.filter((relativePath) => /\.(?:png|jpe?g)$/i.test(relativePath));
+  if (!Array.isArray(detail.public_media) || detail.public_media.length !== expectedPublicMediaPaths.length) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.public_media must bind exactly the frozen public image set.`);
+  } else {
+    detail.public_media.forEach((media, index) => {
+      const mediaBase = `${base}.public_media[${index}]`;
+      if (!checkObject(media, mediaBase, ["path", "sha256"], failures)) return;
+      requireIdentifier(media.path, `${mediaBase}.path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+      requireSha256(media.sha256, `${mediaBase}.sha256`, failures);
+      const expectedPath = expectedPublicMediaPaths[index];
+      const expectedSha256 = frozenFileBindings?.get(expectedPath)?.sha256;
+      if (
+        media.path !== expectedPath
+        || typeof expectedSha256 !== "string"
+        || String(media.sha256 || "").toLowerCase() !== expectedSha256.toLowerCase()
+      ) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${mediaBase} must bind the matching required frozen public image by path and SHA-256.`);
+      }
+    });
+  }
+
+  if (checkObject(detail.summary, `${base}.summary`, [
+    "unresolved_findings",
+    "binary_media_review_confirmed",
+    "raw_sensitive_content_included",
+    "log_trace_ranges_covered",
+    "structured_log_count",
+    "request_log_count",
+    "trace_count",
+    "text_payload_count",
+    "public_media_count",
+    "scanner_finding_count",
+  ], failures)) {
+    for (const key of [
+      "unresolved_findings",
+      "binary_media_review_confirmed",
+      "raw_sensitive_content_included",
+      "log_trace_ranges_covered",
+    ]) {
+      if (detail.summary[key] !== receipt?.[key]) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary.${key} must match the compact privacy receipt.`);
+      }
+    }
+    for (const key of [
+      "structured_log_count",
+      "request_log_count",
+      "trace_count",
+      "text_payload_count",
+      "public_media_count",
+      "scanner_finding_count",
+    ]) {
+      if (!Number.isSafeInteger(detail.summary[key]) || detail.summary[key] < 0) {
+        addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary.${key} must be a non-negative safe integer.`);
+      }
+    }
+    if (detail.summary.text_payload_count !== 0 || detail.summary.scanner_finding_count !== 0) {
+      addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary must report zero text payloads and scanner findings.`);
+    }
+    if (
+      detail.summary.structured_log_count < 1
+      || detail.summary.request_log_count < 1
+      || detail.summary.trace_count < 1
+    ) {
+      addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary must prove positive structured, request, and trace coverage.`);
+    }
+    if (detail.summary.public_media_count !== expectedPublicMediaPaths.length) {
+      addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary.public_media_count must equal the exact frozen public image count.`);
+    }
+    if (runTotals) {
+      for (const key of ["structured_log_count", "request_log_count", "trace_count", "text_payload_count"]) {
+        if (detail.summary[key] !== runTotals[key]) {
+          addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.summary.${key} must equal the sum of the five per-run counts.`);
+        }
+      }
+    }
+  }
+
+  if (!auditWindowValid) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base}.audit_window must contain a valid ordered UTC interval.`);
+  }
+}
+
+async function validateCanonicalPrivacyReceipt(receipt, detail, runBindings, runReceipts, releaseRecord, frozenFileBindings, repoRoot, failures) {
   if (!receipt) return;
   const base = "canonical_privacy_receipt";
   if (!checkObject(receipt, base, [
@@ -3624,9 +4344,11 @@ function validateCanonicalPrivacyReceipt(receipt, runBindings, releaseRecord, fa
     "binary_media_review_confirmed",
     "raw_sensitive_content_included",
     "log_trace_ranges_covered",
+    "detail_path",
+    "detail_sha256",
   ], failures)) return;
   for (const [key, expected] of Object.entries({
-    schema_version: "1",
+    schema_version: "2",
     kind: "found-roll-canonical-privacy",
     status: "PASS",
     unresolved_findings: 0,
@@ -3635,6 +4357,15 @@ function validateCanonicalPrivacyReceipt(receipt, runBindings, releaseRecord, fa
     log_trace_ranges_covered: true,
   })) requireReceiptValue(receipt, key, expected, base, failures);
   requireIdentifier(receipt.submitted_commit, `${base}.submitted_commit`, failures, commitPattern);
+  requireIdentifier(receipt.detail_path, `${base}.detail_path`, failures, /^[A-Za-z0-9][A-Za-z0-9._/-]{1,255}$/);
+  requireSha256(receipt.detail_sha256, `${base}.detail_sha256`, failures);
+  if (
+    receipt.detail_path !== "artifacts/private/canonical-privacy-detail.json"
+    || typeof receipt.detail_sha256 !== "string"
+    || receipt.detail_sha256 !== receipt.detail_sha256.toLowerCase()
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY_DETAIL", `${base} must bind the fixed private detail path with a lowercase SHA-256 digest.`);
+  }
   const releaseCommit = releaseRecord?.repository?.commit_sha;
   if (typeof receipt.submitted_commit !== "string" || typeof releaseCommit !== "string" || receipt.submitted_commit.toLowerCase() !== releaseCommit.toLowerCase()) {
     addFailure(failures, "RECEIPT_BINDING", `${base}.submitted_commit must match the release commit.`);
@@ -3644,11 +4375,27 @@ function validateCanonicalPrivacyReceipt(receipt, runBindings, releaseRecord, fa
   } else {
     receipt.run_ids.forEach((runId, index) => requireIdentifier(runId, `${base}.run_ids[${index}]`, failures));
   }
-  const expectedRunIds = new Set((runBindings || []).map((binding) => binding.run_id));
-  const actualRunIds = new Set(Array.isArray(receipt.run_ids) ? receipt.run_ids : []);
-  if (actualRunIds.size !== 5 || expectedRunIds.size !== 5 || [...expectedRunIds].some((runId) => !actualRunIds.has(runId))) {
-    addFailure(failures, "CANONICAL_PRIVACY", `${base}.run_ids must cover the exact five canonical runs.`);
+  const orderedBindings = orderedCanonicalRunBindings(runBindings);
+  const expectedRunIds = orderedBindings.map((binding) => binding?.run_id);
+  const actualRunIds = Array.isArray(receipt.run_ids) ? receipt.run_ids : [];
+  if (
+    actualRunIds.length !== 5
+    || orderedBindings.length !== 5
+    || new Set(actualRunIds).size !== 5
+    || expectedRunIds.some((runId, index) => actualRunIds[index] !== runId)
+  ) {
+    addFailure(failures, "CANONICAL_PRIVACY", `${base}.run_ids must cover the exact five canonical runs in ordinal order.`);
   }
+  await validateCanonicalPrivacyDetail(
+    detail,
+    receipt,
+    runBindings,
+    runReceipts,
+    releaseRecord,
+    frozenFileBindings,
+    repoRoot,
+    failures,
+  );
 }
 
 function validateCleanBrowserReceipt(receipt, runReceipts, releaseRecord, failures, nowMilliseconds = Date.now()) {
@@ -3946,7 +4693,14 @@ function runGitStatus(repoRoot, args) {
   return result.status;
 }
 
-function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loadedPreflightReceipts = {}) {
+function collectPrivateArtifactBindings(
+  repoRoot,
+  recordPath,
+  releaseRecord,
+  loadedPreflightReceipts = {},
+  canonicalPrivacyReceipt = null,
+  canonicalPrivacyDetail = null,
+) {
   const values = [];
   if (recordPath) values.push(normalizeRelativePath(path.relative(repoRoot, path.resolve(recordPath))));
   const receipts = releaseRecord?.receipts;
@@ -3955,6 +4709,16 @@ function collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loa
     if (Array.isArray(receipts.canonical_runs)) {
       for (const binding of receipts.canonical_runs.slice(0, 5)) {
         values.push(binding?.preparation_path, binding?.run_path, binding?.chain_audit_path);
+      }
+    }
+  }
+  if (isPlainObject(canonicalPrivacyReceipt)) values.push(canonicalPrivacyReceipt.detail_path);
+  if (isPlainObject(canonicalPrivacyDetail)) {
+    values.push(canonicalPrivacyDetail.scanner_input_manifest_path);
+    values.push(canonicalPrivacyDetail.scanner_report_path);
+    if (Array.isArray(canonicalPrivacyDetail.runs)) {
+      for (const run of canonicalPrivacyDetail.runs.slice(0, 5)) {
+        values.push(run?.first_export?.path, run?.second_export?.path);
       }
     }
   }
@@ -4116,6 +4880,7 @@ export async function verifySubmissionReadiness(releaseRecord, {
   }
 
   let canonicalPrivacyReceipt = null;
+  let canonicalPrivacyDetail = null;
   let cleanBrowserReceipt = null;
   if (isPlainObject(releaseRecord?.receipts)) {
     canonicalPrivacyReceipt = await loadReceipt(
@@ -4125,6 +4890,15 @@ export async function verifySubmissionReadiness(releaseRecord, {
       "canonical_privacy_receipt",
       failures,
     );
+    if (canonicalPrivacyReceipt) {
+      canonicalPrivacyDetail = await loadReceipt(
+        repoRoot,
+        canonicalPrivacyReceipt.detail_path,
+        canonicalPrivacyReceipt.detail_sha256,
+        "canonical_privacy_detail",
+        failures,
+      );
+    }
     cleanBrowserReceipt = await loadReceipt(
       repoRoot,
       releaseRecord.receipts.clean_browser_path,
@@ -4141,10 +4915,26 @@ export async function verifySubmissionReadiness(releaseRecord, {
     runReceipts,
     failures,
   );
-  validateCanonicalPrivacyReceipt(canonicalPrivacyReceipt, runBindings, releaseRecord, failures);
+  await validateCanonicalPrivacyReceipt(
+    canonicalPrivacyReceipt,
+    canonicalPrivacyDetail,
+    runBindings,
+    runReceipts,
+    releaseRecord,
+    frozenFileBindings,
+    repoRoot,
+    failures,
+  );
   validateCleanBrowserReceipt(cleanBrowserReceipt, runReceipts, releaseRecord, failures, preflightNowMilliseconds);
   await scanSubmissionMarkdown(repoRoot, failures);
-  const privateArtifactPaths = collectPrivateArtifactBindings(repoRoot, recordPath, releaseRecord, loadedPreflightReceipts);
+  const privateArtifactPaths = collectPrivateArtifactBindings(
+    repoRoot,
+    recordPath,
+    releaseRecord,
+    loadedPreflightReceipts,
+    canonicalPrivacyReceipt,
+    canonicalPrivacyDetail,
+  );
   validateGitState(
     releaseRecord,
     gitState || collectGitState(repoRoot, releaseRecord?.repository?.release_tag, privateArtifactPaths),

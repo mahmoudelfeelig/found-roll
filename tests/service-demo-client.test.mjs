@@ -694,7 +694,7 @@ test("claim-link issuance requires operator and staff credentials without crossi
   assert.equal(calls[0].body.expected_version, 5);
 });
 
-test("connected intake uses separate operator and staff boundaries before analysis", async () => {
+test("connected intake uses separate operator and staff boundaries while the server queues analysis", async () => {
   const client = new ServiceDemoClient("https://custody.example");
   client.setDemoToken("operator-runtime-token");
   client.setStaffToken("staff-evidence-runtime-token");
@@ -716,10 +716,14 @@ test("connected intake uses separate operator and staff boundaries before analys
     return {
       original: { id: "evd-original" },
       preview: { id: "evd-preview", mime_type: "image/jpeg", sha256: "preview-sha" },
+      analysis_job: {
+        case: { id: "case-imported-001", state: "ANALYZING", version: 3 },
+        task: { mode: "cloud_tasks", queued: true, task_name: "projects/demo/locations/us/queues/found-roll/tasks/analysis-001" },
+      },
     };
   };
-  client.beginAnalysis = async () => {
-    calls.push({ kind: "analysis", caseId: client.caseId });
+  client.completeTask = async (analysisJob, expectedState) => {
+    calls.push({ kind: "queued-analysis", analysisJob, expectedState });
     client.case = { id: client.caseId, state: "CLARIFICATION_REQUIRED", version: 5 };
   };
   client.readStaffEvidence = async (evidenceId) => {
@@ -751,8 +755,9 @@ test("connected intake uses separate operator and staff boundaries before analys
   assert.equal(calls[1].options.body.get("authorize_preview_for_model"), "true");
   assert.match(calls[1].options.body.get("idempotency_key"), /^ui:evidence:[a-f0-9]{64}$/);
   assert.deepEqual(calls[2], { kind: "evidence-read", evidenceId: "evd-preview" });
-  assert.equal(calls[3].path, "/api/v1/passports/case-imported-001");
-  assert.deepEqual(calls[4], { kind: "analysis", caseId: "case-imported-001" });
+  assert.equal(calls[3].kind, "queued-analysis");
+  assert.equal(calls[3].expectedState, "CLARIFICATION_REQUIRED");
+  assert.equal(calls.some((call) => call.path === "/api/v1/passports/case-imported-001/analysis-jobs"), false);
   assert.equal(client.intakeEvidence.id, "evd-preview");
   assert.equal(client.intakeEvidence.originalId, "evd-original");
   assert.equal(client.intakeEvidence.filename, "intake.jpg");
@@ -767,7 +772,7 @@ test("retrying a failed evidence upload resumes the same intake command and case
   const createBodies = [];
   const evidenceKeys = [];
   let uploadAttempts = 0;
-  let analysisCalls = 0;
+  let queuedAnalysisCalls = 0;
   client.request = async (path, options = {}) => {
     if (path === "/api/v1/intakes") {
       createBodies.push(JSON.parse(options.body));
@@ -780,6 +785,10 @@ test("retrying a failed evidence upload resumes the same intake command and case
       return {
         original: { id: "evd-resume-original" },
         preview: { id: "evd-resume-preview", mime_type: "image/jpeg", sha256: "preview-sha" },
+        analysis_job: {
+          case: { id: "case-resumable-001", state: "ANALYZING", version: 3 },
+          task: { mode: "cloud_tasks", queued: true, task_name: "projects/demo/locations/us/queues/found-roll/tasks/resume-001" },
+        },
       };
     }
     if (path === "/api/v1/passports/case-resumable-001") {
@@ -788,9 +797,10 @@ test("retrying a failed evidence upload resumes the same intake command and case
     throw new Error(`Unexpected test path: ${path}`);
   };
   client.readStaffEvidence = async () => new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" });
-  client.beginAnalysis = async (idempotencyKey) => {
-    analysisCalls += 1;
-    assert.match(idempotencyKey, /^ui:intake:[a-f0-9]{64}:analysis$/);
+  client.completeTask = async (analysisJob, expectedState) => {
+    queuedAnalysisCalls += 1;
+    assert.equal(analysisJob.task.mode, "cloud_tasks");
+    assert.equal(expectedState, "CLARIFICATION_REQUIRED");
   };
   const file = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "resume.jpg", { type: "image/jpeg" });
   const intake = {
@@ -811,9 +821,75 @@ test("retrying a failed evidence upload resumes the same intake command and case
   assert.equal(createBodies[0].idempotency_key, createBodies[1].idempotency_key);
   assert.equal(evidenceKeys[0], evidenceKeys[1]);
   assert.equal(uploadAttempts, 2);
-  assert.equal(analysisCalls, 1);
+  assert.equal(queuedAnalysisCalls, 1);
   assert.equal(client.caseId, "case-resumable-001");
   assert.equal(client.pendingIntake, null);
+});
+
+test("an ambiguous intake upload observes an already-queued analysis without posting an analysis job", async () => {
+  const client = new ServiceDemoClient("https://custody.example");
+  client.setDemoToken("operator-runtime-token");
+  client.setStaffToken("staff-evidence-runtime-token");
+  const calls = [];
+  client.request = async (path, options = {}) => {
+    calls.push({ path, options });
+    if (path === "/api/v1/intakes") {
+      return { case: { id: "case-ambiguous-001", state: "RECEIVED", version: 1, analysis_auto_start_armed: true } };
+    }
+    if (path === "/api/v1/staff/passports/case-ambiguous-001/evidence") {
+      // Model a lost server response that was retried after the service had
+      // already committed the queued command but could not include its receipt.
+      return {
+        original: { id: "evd-ambiguous-original" },
+        preview: { id: "evd-ambiguous-preview", mime_type: "image/jpeg", sha256: "preview-sha" },
+      };
+    }
+    if (path === "/api/v1/passports/case-ambiguous-001") {
+      return { case: { id: "case-ambiguous-001", state: "ANALYZING", version: 3, analysis_auto_start_armed: true } };
+    }
+    throw new Error(`Unexpected test path: ${path}`);
+  };
+  client.readStaffEvidence = async () => new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" });
+  let observedState = null;
+  client.waitForState = async (expectedState) => {
+    observedState = expectedState;
+    client.case = { id: "case-ambiguous-001", state: expectedState, version: 5, analysis_auto_start_armed: true };
+  };
+  client.beginAnalysis = async () => {
+    throw new Error("The browser must not create an analysis command after an ambiguous upload.");
+  };
+  const file = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "ambiguous.jpg", { type: "image/jpeg" });
+
+  await client.importIntake({
+    assignedTenant: "northport-air",
+    currentHolder: "Northport Air secure dropbox",
+    publicDescription: "Synthetic camera pouch used for recovery testing.",
+    foundAt: "2026-08-29T10:00:00Z",
+    foundZone: "Terminal C",
+    reportRoute: ["Metro Loop", "Northport Air"],
+    authorizePreviewForModel: true,
+    file,
+  });
+
+  assert.equal(observedState, "CLARIFICATION_REQUIRED");
+  assert.equal(calls.some((call) => call.path.endsWith("/analysis-jobs")), false);
+});
+
+test("manual analysis remains available only for the deliberately unarmed fixture", async () => {
+  const client = new ServiceDemoClient();
+  client.case = { id: "FR-20260829-0042", state: "RECEIVED", version: 1, analysis_auto_start_armed: false };
+  let manualStarts = 0;
+  client.beginAnalysis = async () => {
+    manualStarts += 1;
+  };
+  client.loadProjection = async () => ({ case: client.case });
+
+  await client.perform({ type: "ANALYZE" });
+  assert.equal(manualStarts, 1);
+
+  client.case = { ...client.case, analysis_auto_start_armed: true };
+  await assert.rejects(client.perform({ type: "ANALYZE" }), /server-queued/);
+  assert.equal(manualStarts, 1);
 });
 
 test("correcting an invalid image keeps the intake case but creates a new evidence command", async () => {

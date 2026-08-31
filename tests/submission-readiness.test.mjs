@@ -20,6 +20,13 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const verifierPath = path.join(projectRoot, "scripts", "verify-submission-readiness.mjs");
 const approvedEntrantAttestationText = "done free trial active, project linked minimum caps were 10 and 5 euros respectively";
 const approvedEntrantAttestationSha256 = "5ab75588420cca012f174e63eba3ca05f83e88cad99f93916543a335171b6a82";
+const canonicalPrivacyScannerTargets = [
+  "canonical-preparation-receipts",
+  "canonical-run-receipts",
+  "canonical-chain-audits",
+  "canonical-log-export-summaries",
+  "frozen-public-media",
+];
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -35,6 +42,25 @@ function stableJsonValue(value) {
 
 function canonicalJson(value) {
   return Buffer.from(JSON.stringify(stableJsonValue(value)), "utf8");
+}
+
+function canonicalPrivacyWorkflowEvidenceSha256(runReceipt) {
+  assert.equal(typeof runReceipt, "object");
+  assert.notEqual(runReceipt, null);
+  assert.equal(typeof runReceipt.privacy, "object");
+  assert.notEqual(runReceipt.privacy, null);
+  return sha256(canonicalJson({
+    ...runReceipt,
+    status: "BLOCKED",
+    canonical: false,
+    privacy: {
+      ...runReceipt.privacy,
+      receipt_sha256: "0".repeat(64),
+      unresolved_findings: -1,
+      binary_media_review_confirmed: false,
+    },
+    clean_browser_verified: false,
+  }));
 }
 
 function refreshStorageBuildProof(receipt, { refreshAssets = false } = {}) {
@@ -684,19 +710,8 @@ async function createFixture(t) {
   const commit = "1".repeat(40);
   const tree = "2".repeat(40);
   const runIds = Array.from({ length: 5 }, (_value, index) => `canonical-run-00${index + 1}`);
-  const privacyReceipt = {
-    schema_version: "1",
-    kind: "found-roll-canonical-privacy",
-    status: "PASS",
-    submitted_commit: commit,
-    run_ids: runIds,
-    unresolved_findings: 0,
-    binary_media_review_confirmed: true,
-    raw_sensitive_content_included: false,
-    log_trace_ranges_covered: true,
-  };
   const privacyPath = path.join(repoRoot, "artifacts", "private", "canonical-privacy-receipt.json");
-  const privacyFile = await writeJson(privacyPath, privacyReceipt);
+  const privacyDetailPath = path.join(repoRoot, "artifacts", "private", "canonical-privacy-detail.json");
   const billingPreflightReceipt = {
     schema_version: "2",
     kind: "found-roll-google-cloud-billing-preflight",
@@ -937,6 +952,172 @@ async function createFixture(t) {
   const frontendDigest = frozenFiles.find((binding) => binding.path === "artifacts/verification/frontend-build-manifest.json").sha256;
   const preparationScriptDigest = frozenFiles.find((binding) => binding.path === "scripts/prepare-canonical-run.ps1").sha256;
   const pouchFrontDigest = frozenFiles.find((binding) => binding.path === "public/assets/pouch-front.jpg").sha256;
+  const canonicalPrivacyRunWindows = Array.from({ length: 5 }, (_value, index) => {
+    const ordinal = index + 1;
+    const preparedMilliseconds = nowMilliseconds - (31 - ordinal * 3) * 60_000;
+    return {
+      ordinal,
+      startedAt: preparedMilliseconds - 30_000,
+      completedAt: preparedMilliseconds + 90_000,
+    };
+  });
+  const canonicalPrivacyRuns = canonicalPrivacyRunWindows.map((window) => ({
+    ordinal: window.ordinal,
+    run_id: runIds[window.ordinal - 1],
+    app_revision: canonicalAppRevision,
+    simulator_revision: simulatorSourceRevision,
+    audit_window: {
+      started_at: new Date(window.startedAt).toISOString(),
+      completed_at: new Date(window.completedAt).toISOString(),
+    },
+    first_export: {
+      path: `artifacts/private/canonical-privacy-export-${window.ordinal}-first.json`,
+      sha256: null,
+    },
+    second_export: {
+      path: `artifacts/private/canonical-privacy-export-${window.ordinal}-second.json`,
+      sha256: null,
+    },
+    structured_log_count: 16,
+    request_log_count: 4,
+    trace_count: 4,
+    text_payload_count: 0,
+  }));
+  const privacyExportSummaries = [];
+  for (const run of canonicalPrivacyRuns) {
+    const makeExportSummary = (exportIndex) => ({
+      schema_version: "1",
+      kind: "found-roll-canonical-privacy-log-export-summary",
+      status: "PASS",
+      submitted_commit: commit,
+      export_index: exportIndex,
+      ordinal: run.ordinal,
+      run_id: run.run_id,
+      app_revision: run.app_revision,
+      simulator_revision: run.simulator_revision,
+      audit_window: run.audit_window,
+      export_content_sha256: sha256(`canonical-privacy-stabilized-export-${run.ordinal}`),
+      structured_log_count: run.structured_log_count,
+      request_log_count: run.request_log_count,
+      trace_count: run.trace_count,
+      text_payload_count: run.text_payload_count,
+    });
+    const first = makeExportSummary(1);
+    const second = makeExportSummary(2);
+    run.first_export.sha256 = (await writeJson(path.join(repoRoot, run.first_export.path), first)).digest;
+    run.second_export.sha256 = (await writeJson(path.join(repoRoot, run.second_export.path), second)).digest;
+    privacyExportSummaries.push({ first, second });
+  }
+  const privacyScannerInputManifestPath = path.join(
+    repoRoot,
+    "artifacts",
+    "private",
+    "canonical-privacy-scanner-input-manifest.json",
+  );
+  const privacyScannerInputManifest = {
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-scanner-input-manifest",
+    status: "PASS",
+    submitted_commit: commit,
+    app_revision: canonicalAppRevision,
+    simulator_revision: simulatorSourceRevision,
+    audit_window: {
+      started_at: new Date(canonicalPrivacyRunWindows[0].startedAt).toISOString(),
+      completed_at: new Date(canonicalPrivacyRunWindows.at(-1).completedAt).toISOString(),
+    },
+    run_inputs: canonicalPrivacyRuns.map((run) => ({
+      ordinal: run.ordinal,
+      run_id: run.run_id,
+      preparation_path: `artifacts/private/canonical-preparation-${run.ordinal}.json`,
+      preparation_sha256: "0".repeat(64),
+      run_path: `artifacts/private/canonical-run-${run.ordinal}.json`,
+      workflow_evidence_sha256: "0".repeat(64),
+      chain_audit_path: `artifacts/private/canonical-chain-audit-${run.ordinal}.json`,
+      chain_audit_sha256: "0".repeat(64),
+    })),
+    scan_targets: [...canonicalPrivacyScannerTargets],
+    input_count: 15,
+  };
+  const privacyScannerInputManifestFile = await writeJson(
+    privacyScannerInputManifestPath,
+    privacyScannerInputManifest,
+  );
+  const privacyScannerReportPath = path.join(repoRoot, "artifacts", "private", "canonical-privacy-scanner-report.json");
+  const privacyScannerReport = {
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-scanner-report",
+    status: "PASS",
+    submitted_commit: commit,
+    app_revision: canonicalAppRevision,
+    simulator_revision: simulatorSourceRevision,
+    audit_window: structuredClone(privacyScannerInputManifest.audit_window),
+    run_ids: runIds,
+    scanner_input_manifest_path: "artifacts/private/canonical-privacy-scanner-input-manifest.json",
+    scanner_input_manifest_sha256: privacyScannerInputManifestFile.digest,
+    scanner_input_count: privacyScannerInputManifest.input_count,
+    scanned_file_count: 31,
+    scanned_byte_count: 4096,
+    finding_count: 0,
+    unsupported_file_count: 0,
+    skipped_large_file_count: 0,
+    decode_replacement_count: 0,
+    raw_sensitive_content_included: false,
+    finding_values_included: false,
+  };
+  const privacyScannerReportFile = await writeJson(privacyScannerReportPath, privacyScannerReport);
+  const canonicalPrivacyPublicMedia = requiredFrozenFilePaths
+    .filter((relativePath) => /\.(?:png|jpe?g)$/i.test(relativePath))
+    .map((relativePath) => ({
+      path: relativePath,
+      sha256: frozenFiles.find((binding) => binding.path === relativePath).sha256,
+    }));
+  const privacyDetail = {
+    schema_version: "1",
+    kind: "found-roll-canonical-privacy-detail",
+    status: "PASS",
+    submitted_commit: commit,
+    app_revision: canonicalAppRevision,
+    simulator_revision: simulatorSourceRevision,
+    run_ids: runIds,
+    audit_window: {
+      started_at: new Date(canonicalPrivacyRunWindows[0].startedAt).toISOString(),
+      completed_at: new Date(canonicalPrivacyRunWindows.at(-1).completedAt).toISOString(),
+    },
+    scanner_input_manifest_path: "artifacts/private/canonical-privacy-scanner-input-manifest.json",
+    scanner_input_manifest_sha256: privacyScannerInputManifestFile.digest,
+    scanner_input_count: privacyScannerInputManifest.input_count,
+    runs: canonicalPrivacyRuns,
+    scanner_report_path: "artifacts/private/canonical-privacy-scanner-report.json",
+    scanner_report_sha256: privacyScannerReportFile.digest,
+    public_media: canonicalPrivacyPublicMedia,
+    summary: {
+      unresolved_findings: 0,
+      binary_media_review_confirmed: true,
+      raw_sensitive_content_included: false,
+      log_trace_ranges_covered: true,
+      structured_log_count: canonicalPrivacyRuns.reduce((total, run) => total + run.structured_log_count, 0),
+      request_log_count: canonicalPrivacyRuns.reduce((total, run) => total + run.request_log_count, 0),
+      trace_count: canonicalPrivacyRuns.reduce((total, run) => total + run.trace_count, 0),
+      text_payload_count: 0,
+      public_media_count: canonicalPrivacyPublicMedia.length,
+      scanner_finding_count: 0,
+    },
+  };
+  const privacyDetailFile = await writeJson(privacyDetailPath, privacyDetail);
+  const privacyReceipt = {
+    schema_version: "2",
+    kind: "found-roll-canonical-privacy",
+    status: "PASS",
+    submitted_commit: commit,
+    run_ids: runIds,
+    unresolved_findings: 0,
+    binary_media_review_confirmed: true,
+    raw_sensitive_content_included: false,
+    log_trace_ranges_covered: true,
+    detail_path: "artifacts/private/canonical-privacy-detail.json",
+    detail_sha256: privacyDetailFile.digest,
+  };
+  const privacyFile = await writeJson(privacyPath, privacyReceipt);
   const preparationReceipts = [];
   const runReceipts = [];
   const chainAudits = [];
@@ -1201,7 +1382,7 @@ async function createFixture(t) {
     privateArtifactsSafe: true,
     clean: true,
   };
-  return {
+  const fixture = {
     repoRoot,
     record,
     recordPath,
@@ -1215,6 +1396,13 @@ async function createFixture(t) {
     chainAuditPaths,
     privacyReceipt,
     privacyPath,
+    privacyDetail,
+    privacyDetailPath,
+    privacyScannerInputManifest,
+    privacyScannerInputManifestPath,
+    privacyScannerReport,
+    privacyScannerReportPath,
+    privacyExportSummaries,
     cleanBrowserReceipt,
     cleanBrowserPath,
     billingPreflightReceipt,
@@ -1228,6 +1416,9 @@ async function createFixture(t) {
     simulatorStorageReceipt,
     simulatorStoragePath,
   };
+  await rebindCanonicalPrivacy(fixture, { rewriteArtifacts: true });
+  await writeJson(recordPath, record);
+  return fixture;
 }
 
 function failureCodes(result) {
@@ -1254,6 +1445,85 @@ async function rebindPreflightReceipt(fixture, target) {
   };
   const [receipt, receiptPath, binding] = bindings[target];
   binding.sha256 = (await writeJson(receiptPath, receipt)).digest;
+}
+
+async function rebindCanonicalPrivacyArtifacts(fixture) {
+  const canonicalBindings = fixture.record.receipts.canonical_runs;
+  fixture.privacyScannerInputManifest.submitted_commit = fixture.privacyDetail.submitted_commit;
+  fixture.privacyScannerInputManifest.app_revision = fixture.privacyDetail.app_revision;
+  fixture.privacyScannerInputManifest.simulator_revision = fixture.privacyDetail.simulator_revision;
+  fixture.privacyScannerInputManifest.audit_window = structuredClone(fixture.privacyDetail.audit_window);
+  fixture.privacyScannerInputManifest.run_inputs = fixture.privacyDetail.runs.map((run, index) => {
+    const binding = canonicalBindings[index];
+    return {
+      ordinal: run.ordinal,
+      run_id: run.run_id,
+      preparation_path: binding.preparation_path,
+      preparation_sha256: binding.preparation_sha256,
+      run_path: binding.run_path,
+      workflow_evidence_sha256: canonicalPrivacyWorkflowEvidenceSha256(fixture.runReceipts[index]),
+      chain_audit_path: binding.chain_audit_path,
+      chain_audit_sha256: binding.chain_audit_sha256,
+    };
+  });
+  fixture.privacyScannerInputManifest.scan_targets = [...canonicalPrivacyScannerTargets];
+  fixture.privacyScannerInputManifest.input_count = fixture.privacyScannerInputManifest.run_inputs.length * 3;
+  fixture.privacyDetail.scanner_input_manifest_path = "artifacts/private/canonical-privacy-scanner-input-manifest.json";
+  fixture.privacyDetail.scanner_input_manifest_sha256 = (
+    await writeJson(fixture.privacyScannerInputManifestPath, fixture.privacyScannerInputManifest)
+  ).digest;
+  fixture.privacyDetail.scanner_input_count = fixture.privacyScannerInputManifest.input_count;
+  fixture.privacyScannerReport.submitted_commit = fixture.privacyDetail.submitted_commit;
+  fixture.privacyScannerReport.app_revision = fixture.privacyDetail.app_revision;
+  fixture.privacyScannerReport.simulator_revision = fixture.privacyDetail.simulator_revision;
+  fixture.privacyScannerReport.audit_window = structuredClone(fixture.privacyDetail.audit_window);
+  fixture.privacyScannerReport.run_ids = [...fixture.privacyDetail.run_ids];
+  fixture.privacyScannerReport.scanner_input_manifest_path = fixture.privacyDetail.scanner_input_manifest_path;
+  fixture.privacyScannerReport.scanner_input_manifest_sha256 = fixture.privacyDetail.scanner_input_manifest_sha256;
+  fixture.privacyScannerReport.scanner_input_count = fixture.privacyDetail.scanner_input_count;
+  fixture.privacyScannerReport.scanned_file_count = Math.max(
+    fixture.privacyScannerReport.scanned_file_count,
+    fixture.privacyScannerInputManifest.input_count,
+  );
+  fixture.privacyDetail.scanner_report_sha256 = (
+    await writeJson(fixture.privacyScannerReportPath, fixture.privacyScannerReport)
+  ).digest;
+  for (let index = 0; index < fixture.privacyDetail.runs.length; index += 1) {
+    const run = fixture.privacyDetail.runs[index];
+    const summaries = fixture.privacyExportSummaries[index];
+    for (const [exportIndex, key] of [[1, "first"], [2, "second"]]) {
+      const summary = summaries[key];
+      summary.submitted_commit = fixture.privacyDetail.submitted_commit;
+      summary.export_index = exportIndex;
+      summary.ordinal = run.ordinal;
+      summary.run_id = run.run_id;
+      summary.app_revision = run.app_revision;
+      summary.simulator_revision = run.simulator_revision;
+      summary.audit_window = run.audit_window;
+      summary.structured_log_count = run.structured_log_count;
+      summary.request_log_count = run.request_log_count;
+      summary.trace_count = run.trace_count;
+      summary.text_payload_count = run.text_payload_count;
+      const binding = run[`${key}_export`];
+      binding.sha256 = (await writeJson(path.join(fixture.repoRoot, binding.path), summary)).digest;
+    }
+  }
+}
+
+async function rebindCanonicalPrivacy(fixture, { rewriteDetail = true, rewriteArtifacts = false } = {}) {
+  if (rewriteArtifacts) await rebindCanonicalPrivacyArtifacts(fixture);
+  if (rewriteDetail) {
+    const detail = await writeJson(fixture.privacyDetailPath, fixture.privacyDetail);
+    fixture.privacyReceipt.detail_sha256 = detail.digest;
+  }
+  const compact = await writeJson(fixture.privacyPath, fixture.privacyReceipt);
+  fixture.record.receipts.canonical_privacy_sha256 = compact.digest;
+  for (let index = 0; index < fixture.runReceipts.length; index += 1) {
+    fixture.runReceipts[index].privacy.receipt_sha256 = compact.digest;
+    fixture.record.receipts.canonical_runs[index].run_sha256 = (
+      await writeJson(fixture.runPaths[index], fixture.runReceipts[index])
+    ).digest;
+  }
 }
 
 test("a fully bound offline release record passes without network activity", async (t) => {
@@ -2034,14 +2304,13 @@ test("five canonical runs require unique preparations, fixed revisions, and a fi
 test("live trajectory accepts the frozen twelve-call boundary and rejects overflow", async (t) => {
   const fixture = await createFixture(t);
   fixture.runReceipts[0].live_agent.invocation_count = 12;
-  let rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
-  fixture.record.receipts.canonical_runs[0].run_sha256 = rewrittenRun.digest;
+  await rebindCanonicalPrivacy(fixture, { rewriteArtifacts: true });
 
   let result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.equal(result.ok, true, formatReadinessResult(result));
 
   fixture.runReceipts[0].live_agent.invocation_count = 13;
-  rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
+  const rewrittenRun = await writeJson(fixture.runPaths[0], fixture.runReceipts[0]);
   fixture.record.receipts.canonical_runs[0].run_sha256 = rewrittenRun.digest;
   result = await verifySubmissionReadiness(fixture.record, fixture);
   assert.equal(result.ok, false);
@@ -2066,6 +2335,104 @@ test("cloud, trajectory, closure, and privacy proof cannot be reduced to a pass 
   assert.equal(codes.has("LIVE_AGENT_TRAJECTORY"), true);
   assert.equal(codes.has("CLOUD_DUPLICATE_PROOF"), true);
   assert.equal(codes.has("CANONICAL_PRIVACY"), true);
+});
+
+test("canonical privacy v2 hash-binds a bounded detail receipt and rejects unsafe detail shapes", async (t) => {
+  const unknownFieldFixture = await createFixture(t);
+  unknownFieldFixture.privacyDetail.raw_log_text = "untrusted raw log text";
+  await rebindCanonicalPrivacy(unknownFieldFixture);
+  let result = await verifySubmissionReadiness(unknownFieldFixture.record, unknownFieldFixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("RECORD_UNKNOWN_FIELDS"), true);
+
+  const fixedPathFixture = await createFixture(t);
+  fixedPathFixture.privacyReceipt.detail_path = "artifacts/private/alternate-privacy-detail.json";
+  await rebindCanonicalPrivacy(fixedPathFixture);
+  result = await verifySubmissionReadiness(fixedPathFixture.record, fixedPathFixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_DETAIL"), true);
+
+  const uppercaseDigestFixture = await createFixture(t);
+  uppercaseDigestFixture.privacyReceipt.detail_sha256 = uppercaseDigestFixture.privacyReceipt.detail_sha256.toUpperCase();
+  await rebindCanonicalPrivacy(uppercaseDigestFixture, { rewriteDetail: false });
+  result = await verifySubmissionReadiness(uppercaseDigestFixture.record, uppercaseDigestFixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_DETAIL"), true);
+});
+
+test("canonical privacy v2 rejects nonzero or absent coverage, ordinal drift, and media/hash mismatches", async (t) => {
+  const variants = [
+    ["nonzero text", (detail) => { detail.runs[0].text_payload_count = 1; }],
+    ["zero structured coverage", (detail) => { detail.runs[0].structured_log_count = 0; }],
+    ["duplicate ordinal", (detail) => { detail.runs[1].ordinal = 1; }],
+    ["wrong public media hash", (detail) => { detail.public_media[0].sha256 = "e".repeat(64); }],
+    ["summary mismatch", (detail) => { detail.summary.request_log_count += 1; }],
+  ];
+  for (const [label, mutate] of variants) {
+    const fixture = await createFixture(t);
+    mutate(fixture.privacyDetail);
+    await rebindCanonicalPrivacy(fixture);
+    const result = await verifySubmissionReadiness(fixture.record, fixture);
+    assert.equal(result.ok, false, label);
+    assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_DETAIL"), true, label);
+  }
+});
+
+test("canonical privacy v2 rejects a rehashed unstable second export artifact", async (t) => {
+  const fixture = await createFixture(t);
+  const summaries = fixture.privacyExportSummaries[2];
+  summaries.second.export_content_sha256 = "f".repeat(64);
+  const secondBinding = fixture.privacyDetail.runs[2].second_export;
+  secondBinding.sha256 = (
+    await writeJson(path.join(fixture.repoRoot, secondBinding.path), summaries.second)
+  ).digest;
+  await rebindCanonicalPrivacy(fixture);
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_EXPORT"), true);
+});
+
+test("canonical privacy v2 rejects a widened hand-authored audit window", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.privacyDetail.audit_window.started_at = new Date(
+    Date.parse(fixture.privacyDetail.audit_window.started_at) - 1_000,
+  ).toISOString();
+  await rebindCanonicalPrivacy(fixture);
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_DETAIL"), true);
+});
+
+test("canonical privacy v2 rejects scanner input scope drift after rehashing the manifest", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.privacyScannerInputManifest.run_inputs[0].run_id = "unrelated-canonical-run";
+  fixture.privacyDetail.scanner_input_manifest_sha256 = (
+    await writeJson(fixture.privacyScannerInputManifestPath, fixture.privacyScannerInputManifest)
+  ).digest;
+  fixture.privacyScannerReport.scanner_input_manifest_sha256 = fixture.privacyDetail.scanner_input_manifest_sha256;
+  fixture.privacyDetail.scanner_report_sha256 = (
+    await writeJson(fixture.privacyScannerReportPath, fixture.privacyScannerReport)
+  ).digest;
+  await rebindCanonicalPrivacy(fixture);
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_SCANNER_INPUT"), true);
+});
+
+test("canonical privacy v2 detects immutable workflow evidence drift after a release run rebind", async (t) => {
+  const fixture = await createFixture(t);
+  fixture.runReceipts[0].live_agent.invocation_count = 5;
+  fixture.record.receipts.canonical_runs[0].run_sha256 = (
+    await writeJson(fixture.runPaths[0], fixture.runReceipts[0])
+  ).digest;
+
+  const result = await verifySubmissionReadiness(fixture.record, fixture);
+  assert.equal(result.ok, false);
+  assert.equal(failureCodes(result).has("CANONICAL_PRIVACY_SCANNER_INPUT"), true);
+  assert.equal(failureCodes(result).has("RECEIPT_BINDING"), false);
 });
 
 test("a hash-bound chain audit is recomputed instead of trusted by label", async (t) => {
@@ -3424,6 +3791,12 @@ test("all private receipt templates parse and remain explicitly blocked", async 
     assert.equal(template.kind, kind);
     assert.equal(template.status, "BLOCKED");
   }
+  const privacyTemplate = JSON.parse(
+    await readFile(path.join(projectRoot, "docs", "canonical-privacy.template.json"), "utf8"),
+  );
+  assert.equal(privacyTemplate.schema_version, "2");
+  assert.equal(privacyTemplate.detail_path, "artifacts/private/canonical-privacy-detail.json");
+  assert.match(privacyTemplate.detail_sha256, /^<canonical-privacy-detail-sha256>$/);
   const storageTemplate = JSON.parse(
     await readFile(path.join(projectRoot, "docs", "google-cloud-project-storage-audit.template.json"), "utf8"),
   );
@@ -3469,20 +3842,17 @@ test("the CLI binds HEAD, local tag, configured remote, and a clean worktree", a
 
   fixture.record.repository.commit_sha = headCommit;
   fixture.record.repository.tree_sha = headTree;
+  fixture.privacyDetail.submitted_commit = headCommit;
   fixture.privacyReceipt.submitted_commit = headCommit;
-  const rewrittenPrivacy = await writeJson(fixture.privacyPath, fixture.privacyReceipt);
-  fixture.record.receipts.canonical_privacy_sha256 = rewrittenPrivacy.digest;
   for (let index = 0; index < fixture.runReceipts.length; index += 1) {
     fixture.runReceipts[index].submitted_commit = headCommit;
     fixture.runReceipts[index].tree_sha = headTree;
-    fixture.runReceipts[index].privacy.receipt_sha256 = rewrittenPrivacy.digest;
-    const rewrittenRun = await writeJson(fixture.runPaths[index], fixture.runReceipts[index]);
-    fixture.record.receipts.canonical_runs[index].run_sha256 = rewrittenRun.digest;
     fixture.chainAudits[index].submitted_commit = headCommit;
     fixture.chainAudits[index].tree_sha = headTree;
     const rewrittenChainAudit = await writeJson(fixture.chainAuditPaths[index], fixture.chainAudits[index]);
     fixture.record.receipts.canonical_runs[index].chain_audit_sha256 = rewrittenChainAudit.digest;
   }
+  await rebindCanonicalPrivacy(fixture, { rewriteArtifacts: true });
   fixture.cleanBrowserReceipt.submitted_commit = headCommit;
   const rewrittenBrowser = await writeJson(fixture.cleanBrowserPath, fixture.cleanBrowserReceipt);
   fixture.record.receipts.clean_browser_sha256 = rewrittenBrowser.digest;

@@ -62,13 +62,17 @@ function eventLabel(type = "SERVICE_EVENT") {
     .join(" ");
 }
 
-function stateNotice(state, flags, riskTier) {
+function stateNotice(state, flags, riskTier, analysisAutoStartArmed = false) {
   if (flags.tokenReplayRejected) return "Credential replay was rejected by the custody service. No custody state changed.";
   if (flags.callbackReplayHandled) return "Duplicate release work was acknowledged idempotently. The service event chain did not advance.";
   const notices = {
-    RECEIVED: "The service has received the synthetic intake. Start bounded analysis when the operator credential is loaded.",
-    EVIDENCE_READY: "Service evidence is ready for bounded analysis.",
-    ANALYZING: "The custody service is running bounded candidate analysis.",
+    RECEIVED: analysisAutoStartArmed
+      ? "This ordinary intake will queue bounded analysis only after staff authorizes its derived preview."
+      : "The prepared synthetic case is waiting for its bounded analysis command.",
+    EVIDENCE_READY: analysisAutoStartArmed
+      ? "The server is committing the authorized evidence packet and queued analysis command."
+      : "Service evidence is ready for bounded analysis.",
+    ANALYZING: "The custody service queued and is running bounded candidate analysis.",
     CANDIDATES_READY: "Candidates are structured; the service is preparing a private discriminator.",
     CLARIFICATION_REQUIRED: "Visual similarity is insufficient. The connected service requires private evidence.",
     CLAIM_EVIDENCE_ACCEPTED: "The service accepted claim evidence. Staff identity attestation is still required.",
@@ -169,7 +173,12 @@ export function projectCustodySnapshot(snapshot, session = {}) {
     intakeEvidence: session.intakeEvidence || null,
     execution: snapshot.execution || null,
     disclosure: snapshot.disclosure || null,
-    lastNotice: stateNotice(custodyCase.state, flags, custodyCase.risk_tier),
+    lastNotice: stateNotice(
+      custodyCase.state,
+      flags,
+      custodyCase.risk_tier,
+      custodyCase.analysis_auto_start_armed,
+    ),
   };
 }
 
@@ -740,9 +749,16 @@ export class ServiceDemoClient {
       src: objectUrl || null,
       objectUrl: objectUrl || null,
     });
-    const current = await this.snapshot();
-    if (["RECEIVED", "EVIDENCE_READY", "ANALYZING"].includes(current.case.state)) {
-      await this.beginAnalysis(`${idempotencyKey}:analysis`);
+    if (uploaded.analysis_job) {
+      this.case = uploaded.analysis_job.case;
+      await this.completeTask(uploaded.analysis_job, "CLARIFICATION_REQUIRED");
+    } else {
+      const current = await this.snapshot();
+      // A response can be lost after the server committed the background command.
+      // In that case the retry observes the running task instead of issuing one.
+      if (current.case.state === "ANALYZING") {
+        await this.waitForState("CLARIFICATION_REQUIRED");
+      }
     }
     this.pendingIntake = null;
   }
@@ -885,6 +901,9 @@ export class ServiceDemoClient {
     if (!this.case) await this.snapshot();
     switch (action.type) {
       case "ANALYZE":
+        if (this.case?.analysis_auto_start_armed) {
+          throw new Error("This ordinary intake is server-queued after its authorized preview; refresh its authoritative state instead.");
+        }
         await this.beginAnalysis();
         break;
       case "SUBMIT_CLAIM":

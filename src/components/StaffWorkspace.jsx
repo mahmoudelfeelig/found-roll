@@ -393,6 +393,7 @@ function CaseInspector({ demo }) {
         <StateTrack state={demo.state} />
         <p>Current: <strong>{demo.state.replaceAll("_", " ")}</strong></p>
         <small>{demo.state === "CLOSED" ? "Service event manifest is internally consistent." : "Release work remains policy-bound; Gemini cannot mutate this state."}</small>
+        {demo.authoritativeCase?.analysis_auto_start_armed && <small>Server queue armed after an authorized preview.</small>}
       </section>
     </aside>
   );
@@ -500,7 +501,7 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
       return;
     }
     if (!authorizePreviewForModel) {
-      setFormError("Confirm the derived-preview permission before starting bounded candidate analysis.");
+      setFormError("Confirm the derived-preview permission before the service queues bounded candidate analysis.");
       return;
     }
     const holders = {
@@ -557,7 +558,7 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
             </div>
           )}
 
-          <footer><button type="button" className="secondary-action" onClick={closeDialog}>{intakeStopped ? "Acknowledge safety stop" : "Cancel"}</button>{safety === "ORDINARY_ITEM" && <button type="submit" className="primary-action" disabled={busy || !credentialsReady}>{busy ? "Importing…" : "Create passport & analyze"}</button>}</footer>
+          <footer><button type="button" className="secondary-action" onClick={closeDialog}>{intakeStopped ? "Acknowledge safety stop" : "Cancel"}</button>{safety === "ORDINARY_ITEM" && <button type="submit" className="primary-action" disabled={busy || !credentialsReady}>{busy ? "Importing…" : "Create passport & queue analysis"}</button>}</footer>
         </form>
       </dialog>
   );
@@ -570,7 +571,17 @@ function BottomActions({ demo, dispatch, setView, busy, operatorTokenLoaded, sta
     riskTier: demo.authoritativeCase?.risk_tier,
     approvalRecorded: Boolean(demo.approval),
   });
-  if (["RECEIVED", "EVIDENCE_READY"].includes(demo.state)) buttons.push({ label: "Start Bounded Analysis", icon: ArrowsClockwise, action: () => dispatch({ type: "ANALYZE" }), requiresToken: true });
+  if (["RECEIVED", "EVIDENCE_READY"].includes(demo.state)) {
+    if (demo.authoritativeCase?.analysis_auto_start_armed) {
+      buttons.push({
+        label: demo.state === "RECEIVED" ? "Await Authorized Preview" : "Refresh Service State",
+        icon: ArrowsClockwise,
+        action: () => dispatch({ type: "REFRESH" }),
+      });
+    } else {
+      buttons.push({ label: "Start Bounded Analysis", icon: ArrowsClockwise, action: () => dispatch({ type: "ANALYZE" }), requiresToken: true });
+    }
+  }
   else if (["ANALYZING", "CANDIDATES_READY"].includes(demo.state)) buttons.push({ label: "Refresh Service State", icon: ArrowsClockwise, action: () => dispatch({ type: "REFRESH" }) });
   else if (demo.state === "CLARIFICATION_REQUIRED") buttons.push({
     label: demo.claimLink?.available ? "Open Separate Claimant Link" : "Issue & Open Separate Claimant Link",
