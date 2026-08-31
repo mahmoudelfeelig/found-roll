@@ -43,4 +43,4 @@ The compiled browser client carries the full direct-runtime texts in `public/leg
 
 ## Generated media
 
-The six synthetic fixture images are project-specific generated media. Their provenance, intended visibility, byte lengths, and SHA-256 digests are recorded in `public/assets/README.md`. No Google or Picasa logos, proprietary artwork, or real custodian media is included.
+The five public synthetic fixture images are project-specific generated media. Their provenance, intended visibility, byte lengths, and SHA-256 digests are recorded in `public/assets/README.md`. No Google or Picasa logos, proprietary artwork, or real custodian media is included.

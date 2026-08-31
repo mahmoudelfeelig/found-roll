@@ -10,14 +10,14 @@ The rendered diagram is generated from [`architecture-diagram.mmd`](architecture
 
 ## System view
 
-The checked PNG above is the single system-level architecture diagram; the earlier inline duplicate was removed so it cannot drift from the rendered, hash-bound source. The browser never writes custody events or restricted evidence directly. Production rich reads and staff actions require the staff credential, approval requires the supervisor credential, and ordinary synthetic workflow mutations require the demo credential; intake, claimant-link issuance, and duplicate release-task delivery require both demo and staff. A strict non-mutating bootstrap probe validates all three before the staff projection loads. The service then derives the exact configured staff or supervisor actor ID; conflicting optional legacy actor fields fail closed. The claimant receives only a purpose-built coarse projection through a one-time case/version-scoped link, never a staff passport, event, candidate, or manifest response.
+The checked PNG above is the single system-level architecture diagram; the earlier inline duplicate was removed so it cannot drift from the rendered, hash-bound source. The browser never writes custody events or restricted evidence directly. Production rich reads and staff actions require the staff credential, approval requires the supervisor credential, and ordinary synthetic workflow mutations require the demo credential; intake, claimant-link issuance, and duplicate release-task delivery require both demo and staff. A strict non-mutating bootstrap probe validates all three before the staff projection loads. The service then derives the exact configured staff or supervisor actor ID; conflicting optional legacy actor fields fail closed. The claimant receives only a purpose-built coarse projection through a one-time case/version-scoped link, never a staff passport, event, candidate, or manifest response. The hosted root is a separate no-store, non-mutating Judge Walkthrough of the fixed closed synthetic case; it omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs.
 
 ## Authority boundary
 
 | Component | May do | Must never do |
 | --- | --- | --- |
-| Case Analyst, implemented with Google ADK and Gemini | Read the already-authorized candidate packet, compare multimodal evidence, submit source-linked observations, rank candidates, choose a restricted attribute identifier, and draft one non-leading question | See the expected private answer; accept claim evidence; attest identity; approve, reserve, release, or close an item; mint or consume credentials; write custody state |
-| Deterministic policy engine | Evaluate hard filters, evidence sufficiency, risk tier, staff attestation, approval, freshness, and token state | Interpret images or invent evidence |
+| Case Analyst, implemented with Google ADK and Gemini | Read the policy-fixed already-authorized candidate packet, compare multimodal evidence, submit source-linked observations, and draft one non-leading question | See the expected private answer; select a candidate or discriminator; accept claim evidence; attest identity; approve, reserve, release, or close an item; mint or consume credentials; write custody state |
+| Deterministic policy engine | Evaluate hard filters, evidence sufficiency, risk tier, staff attestation, approval, freshness, and token state; fix the eligible candidate ordering and allowed discriminator | Interpret images or invent evidence |
 | Custody service | Validate typed commands and state versions, transact state and outbox rows, append hash-linked events, dispatch work, reconcile service attestations, and build a manifest | Treat model confidence or a simulator response as proof of ownership or physical possession |
 | Human claimant | Supply the minimum private fact requested | Browse candidates or staff-only evidence |
 | Staff and supervisor | Record a minimal identity-check attestation and approve a valuable-item handoff | Delegate the approval decision to the model |
@@ -43,7 +43,7 @@ sequenceDiagram
     A->>T: Named opaque task with case_id and outbox_id
     T->>A: OIDC-authenticated /tasks/outbox
     A->>G: Authorized evidence packet
-    G-->>A: Ranked candidates and next-question proposal
+    G-->>A: Observations and next-question proposal for policy-fixed packet
     A->>F: CLARIFICATION_REQUIRED
     A-->>C: One non-leading private question
     C->>A: Private answer through isolated proof surface

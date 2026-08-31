@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,21 @@ test("the generated browser chunks do not contain the restricted fixture answer"
     .map((output) => output.code || output.source?.toString() || "")
     .join("\n");
   assert.equal(browserText.includes(restrictedFixtureValue), false);
+  assert.equal(outputs.some((output) => output.fileName.includes("pouch-serial-detail")), false);
+});
+
+test("the public browser build has no staff-only serial asset or source reference", async () => {
+  await assert.rejects(
+    access(path.join(projectRoot, "public", "assets", "pouch-serial-detail.jpg")),
+    { code: "ENOENT" },
+  );
+  const [files, publicAssets] = await Promise.all([
+    sourceFiles(path.join(projectRoot, "src")),
+    readdir(path.join(projectRoot, "public", "assets")),
+  ]);
+  const sourceText = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
+  assert.equal(sourceText.includes("pouch-serial-detail"), false);
+  assert.equal(publicAssets.includes("pouch-serial-detail.jpg"), false);
 });
 
 test("staff session controls stay functional while claimant secrets remain isolated", async () => {
@@ -57,6 +72,11 @@ test("staff session controls stay functional while claimant secrets remain isola
 });
 
 test("direct claimant and relay scopes cannot navigate into staff or each other", () => {
+  assert.equal(resolveSurfaceScope(""), "walkthrough");
+  assert.equal(resolveSurfaceScope("?view=walkthrough"), "walkthrough");
+  assert.equal(canNavigateSurface("walkthrough", "walkthrough"), true);
+  assert.equal(canNavigateSurface("walkthrough", "staff"), false);
+
   assert.equal(resolveSurfaceScope("?view=claimant"), "claimant");
   assert.equal(canNavigateSurface("claimant", "claimant"), true);
   assert.equal(canNavigateSurface("claimant", "staff"), false);
@@ -84,14 +104,17 @@ test("claimant proof URLs carry only case scope and a fragment token into a sepa
   assert.equal(url.searchParams.has("claim"), false);
 });
 
-test("claimant and relay chrome policies expose no staff menu, identity, reset, or view picker", () => {
-  for (const surface of ["claimant", "relay"]) {
+test("public, claimant, and relay chrome policies expose no staff menu, identity, reset, or view picker", () => {
+  for (const surface of ["walkthrough", "claimant", "relay"]) {
     const policy = chromePolicyFor(surface);
     assert.equal(policy.showStaffMenus, false);
     assert.equal(policy.showViewPicker, false);
     assert.equal(policy.showStaffIdentity, false);
     assert.equal(policy.showReset, false);
-    assert.match(policy.scopeLabel, /no staff access/i);
+    assert.match(
+      policy.scopeLabel,
+      surface === "walkthrough" ? /public judge walkthrough/i : /no staff access/i,
+    );
   }
 });
 

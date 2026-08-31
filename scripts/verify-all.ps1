@@ -108,7 +108,7 @@ try {
         -Message 'Frozen evaluation receipt is not a truthful 15/15 local pass with canonical status incomplete.'
     Assert-JsonInvariant `
         -Path 'evaluation\privacy-scan-results.json' `
-        -Check { param($x) $x.status -eq 'PASS' -and $x.finding_count -eq 0 -and $x.skipped_large_file_count -eq 0 -and $x.decode_replacement_count -eq 0 -and $x.unsupported_file_count -eq 6 -and $x.unsupported_extensions.'.jpg' -eq 6 } `
+        -Check { param($x) $x.status -eq 'PASS' -and $x.finding_count -eq 0 -and $x.skipped_large_file_count -eq 0 -and $x.decode_replacement_count -eq 0 -and $x.unsupported_file_count -eq 5 -and $x.unsupported_extensions.'.jpg' -eq 5 } `
         -Message 'Strict publication scan is not clean or its known binary-image boundary changed.'
     Assert-JsonInvariant `
         -Path 'evaluation\privacy-scan-docs-results.json' `
@@ -133,7 +133,6 @@ try {
         'public\assets\pouch-front.jpg' = @{ Bytes = 326943; Sha256 = '7eecc012b0f8638fc59f2979ea0cdd3888e6cf5e9659eea2f30f0388bcea6d42' }
         'public\assets\pouch-interior.jpg' = @{ Bytes = 329913; Sha256 = '5a2dc95289981af12a057c3754d5df6140b67de842dc803a5092f5e9d1fb6b1e' }
         'public\assets\pouch-rear.jpg' = @{ Bytes = 347067; Sha256 = '1768db7c0249316c55877a73d91bd09689118f800e7a40ff339d2cfea6a6b159' }
-        'public\assets\pouch-serial-detail.jpg' = @{ Bytes = 406635; Sha256 = '7189901bb01d2130f18fc96f17a86529254a4a5e789c043a225993a6ee191a6d' }
     }
     foreach ($Entry in $ExpectedAssets.GetEnumerator()) {
         $Asset = Get-Item -LiteralPath $Entry.Key

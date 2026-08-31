@@ -109,6 +109,11 @@ def test_claim_evidence_requires_a_scoped_link_and_consumes_it_once(client, case
     assert missing.status_code == 403
     assert missing.json()["error"]["code"] == "claim_link_required"
 
+    missing_inspection = client.get(f"/api/v1/passports/{case_id}/claim-link")
+    assert missing_inspection.status_code == 403
+    assert missing_inspection.headers["cache-control"] == "no-store, private"
+    assert missing_inspection.json()["error"]["code"] == "claim_link_required"
+
     issued = _issue_link(client)
     assert issued["case_id"] == case_id
     assert issued["issued_case_version"] == 5
@@ -120,6 +125,7 @@ def test_claim_evidence_requires_a_scoped_link_and_consumes_it_once(client, case
         headers={"X-Found-Roll-Claim-Link": issued["token"]},
     )
     assert inspected.status_code == 200
+    assert inspected.headers["cache-control"] == "no-store, private"
     assert inspected.json()["active"] is True
     assert "token" not in inspected.json()
     _assert_no_restricted_claimant_fields(inspected.json())

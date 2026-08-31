@@ -39,7 +39,6 @@ export const libraryItems = [
   { id: "ML_188", custodianId: "metro-loop", dateLabel: "Aug 29, 2026", filename: "ML29_0188.JPG", src: "/assets/claimant-match.jpg", label: "Similar pouch" },
   { id: "GH_077", custodianId: "grand-hall", dateLabel: "Aug 29, 2026", filename: "GH29_0077.JPG", src: "/assets/northport-intake.jpg", label: "Counter intake" },
   { id: "NPA_042_C", custodianId: "northport", dateLabel: "Aug 29, 2026", filename: "NPA29_042_C.JPG", src: "/assets/pouch-interior.jpg", label: "Interior" },
-  { id: "NPA_042_D", custodianId: "northport", dateLabel: "Aug 29, 2026", filename: "NPA29_042_D.JPG", src: "/assets/pouch-serial-detail.jpg", label: "Restricted detail" },
 ];
 
 export const evidenceTags = ["camera pouch", "black nylon", "orange stitch", "two zips", "inner flap"];
@@ -61,19 +60,12 @@ export const comparison = {
     dimensions: "1600×1200",
     size: "1.3 MB",
   },
-  privateDetail: {
-    filename: "NPA29_042_D.JPG",
-    view: "Staff-only serial crop",
-    src: "/assets/pouch-serial-detail.jpg",
-    note: "Lens serial fragment retained as restricted staff evidence",
-  },
 };
 
 export const trayItems = [
   { id: "front", label: "Front", src: "/assets/pouch-front.jpg" },
   { id: "rear", label: "Rear", src: "/assets/pouch-rear.jpg", selected: true },
   { id: "inside", label: "Interior", src: "/assets/pouch-interior.jpg" },
-  { id: "detail", label: "Serial", src: "/assets/pouch-serial-detail.jpg", restricted: true },
   { id: "voice", label: "Claim — typed report", transcript: "Black camera pouch, two zips, orange stitching inside." },
   { id: "claim-photo", label: "Claim — prior photo", src: "/assets/claimant-match.jpg", blurred: true },
 ];

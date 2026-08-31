@@ -9,7 +9,7 @@ Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmou
 ## What the demo proves
 
 - One report searches the fictional Grand Hall, Metro Loop, and Northport Air inventories.
-- Visual similarity alone is refused. The bounded analyst can rank candidates but cannot accept a claim or mutate custody.
+- Visual similarity alone is refused. The deterministic custody engine fixes the eligible candidate packet; the bounded analyst inspects it and proposes one non-leading question, but cannot accept a claim or mutate custody.
 - The valuable camera-pouch fixture needs an exact private serial fragment, a staff identity attestation, and supervisor approval.
 - Reservation and release use an outbox boundary, expected versions, remote eTags, and idempotency keys.
 - A separately deployable `SIMULATED Relay Post` records two scoped token presentations and returns a signed service attestation.
@@ -19,6 +19,8 @@ Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmou
 Northport Air, Metro Loop, Grand Hall, Relay Post, every inventory row, every route event, and every photo are fictional or synthetic. The relay is always simulated. Live mode uses real Google ADK, Gemini, Cloud Run, Firestore, Cloud Storage, and Cloud Tasks execution only when the required project configuration is present.
 
 ## Product surfaces
+
+The hosted root is a public, non-mutating Judge Walkthrough for the fixed completed synthetic case. It accepts no credentials and exposes only a redacted status/timeline, bounded-analyst metadata, and internal manifest-consistency summary. It omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs; it neither proves ownership nor possession nor performs a physical handoff.
 
 The staff workspace contains the custodian folder tree, dated evidence library, candidate metadata comparison, staff-only detail, evidence tray, release-policy inspector, credential state, and Item Passport playback in one dense desktop shell. Once authenticated, it loads the active server-derived preview for the current workflow epoch. If that preview is unavailable, the workspace shows an unavailable state rather than substituting unrelated fixture media.
 
@@ -35,7 +37,7 @@ npm ci --prefer-offline --no-audit --no-fund
 npm run dev -- --host 127.0.0.1
 ```
 
-The UI defaults to an explicitly read-only deterministic browser fixture when the custody API is unavailable and labels that state in the status bar. In a combined app image it probes `/api/v1/healthz` and distinguishes fixture from live Vertex ADK mode. The namespaced route avoids the Google Frontend 404 observed at the exact `/healthz` path on the deployed Cloud Run service; `/healthz` remains available for container-local probes.
+The root defaults to the public Judge Walkthrough and uses only the non-mutating public `/api/v1/healthz` and `/api/v1/judge-walkthrough` reads; if the read-only service projection is unavailable, it shows an unavailable state rather than private fixture data. The protected staff workspace is at `?view=staff`. In a combined app image it probes `/api/v1/healthz` and distinguishes fixture from live Vertex ADK mode. The namespaced route avoids the Google Frontend 404 observed at the exact `/healthz` path on the deployed Cloud Run service; `/healthz` remains available for container-local probes.
 
 The deterministic synthetic answer remains in server-side fixture/test material for reproducibility; it is not compiled into the browser. In connected mode, the operator loads the separate demo, staff, and supervisor runtime credentials through the staff control. The browser proves all three through the strict runtime-role probe, then sends each only to its matching boundary and never stores them beyond the tab. Empty, partial, or rejected configuration clears credentials, claimant links, handoff tokens, pending intake state, task receipts, manifest data, and private evidence URLs. The operator then uses the action strip to issue a case/version-scoped claimant link, submit evidence through that private link, record the staff identity attestation, obtain supervisor approval, reserve Relay Post, present both handoff credentials, complete the simulated delivery, and queue one duplicate task delivery. A consumed credential is rejected; the duplicate completed delivery is acknowledged idempotently without appending another event.
 
@@ -99,7 +101,7 @@ $env:PORT = '8080'
 service\.venv\Scripts\python.exe -m deployment.serve
 ```
 
-Open `http://127.0.0.1:8080/`. The status bar must report the connected deterministic fixture analyst; `http://127.0.0.1:8080/api/v1/healthz` must report `inventory_mode=http`, `inventory_gateway_ready=true`, and `relay_mode=http`. Load the three local demo, staff, and supervisor values above into their matching password fields for this tab; the all-three probe must succeed before the staff projection loads. The UI's **Refresh case** command only reloads authoritative state; it does not reset either service. Restart both local processes for a fresh local repeat. For a deployed canonical run, reset and upload the frozen evidence pair from an authenticated terminal or Cloud Shell with `scripts/prepare-canonical-run.ps1`; no browser reset exists and the admin credential must never enter the frontend.
+Open `http://127.0.0.1:8080/` to inspect the public redacted walkthrough, or `http://127.0.0.1:8080/?view=staff` for the protected staff workspace. The staff status bar must report the connected deterministic fixture analyst; `http://127.0.0.1:8080/api/v1/healthz` must report `inventory_mode=http`, `inventory_gateway_ready=true`, and `relay_mode=http`. Load the three local demo, staff, and supervisor values above into their matching password fields for this tab; the all-three probe must succeed before the staff projection loads. The UI's **Refresh case** command only reloads authoritative state; it does not reset either service. Restart both local processes for a fresh local repeat. For a deployed canonical run, reset and upload the frozen evidence pair from an authenticated terminal or Cloud Shell with `scripts/prepare-canonical-run.ps1`; no browser reset exists and the admin credential must never enter the frontend.
 
 Local fixture mode is intentionally not acceptable evidence for the canonical hackathon video. The live recording must show the pinned model, the Vertex ADK run, Cloud Run revisions, Firestore mutations, current-epoch Cloud Storage evidence provenance, Cloud Task delivery, the separate simulator request, and one duplicate completed-release task delivery acknowledged without another custody event from the prepared reset run. Consumed-token and callback-idempotency negatives remain machine-receipt evidence; the recording does not promise separate UI controls for them.
 

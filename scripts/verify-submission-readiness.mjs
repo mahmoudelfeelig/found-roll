@@ -84,7 +84,6 @@ export const requiredFrozenFilePaths = [
   "public/assets/pouch-front.jpg",
   "public/assets/pouch-interior.jpg",
   "public/assets/pouch-rear.jpg",
-  "public/assets/pouch-serial-detail.jpg",
   "evaluation/fixtures.json",
   "evaluation/privacy-canaries.json",
   "evaluation/results.json",

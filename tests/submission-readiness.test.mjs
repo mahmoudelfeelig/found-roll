@@ -647,7 +647,6 @@ async function createFixture(t) {
     ["public/assets/pouch-front.jpg", "pouch-front-fixture"],
     ["public/assets/pouch-interior.jpg", "pouch-interior-fixture"],
     ["public/assets/pouch-rear.jpg", "pouch-rear-fixture"],
-    ["public/assets/pouch-serial-detail.jpg", "pouch-serial-detail-fixture"],
     ["evaluation/fixtures.json", localFixtureManifestRaw],
     ["evaluation/privacy-canaries.json", privacyCanaryManifest],
     ["evaluation/results.json", localEvaluationRaw],

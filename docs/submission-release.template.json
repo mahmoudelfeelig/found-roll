@@ -203,7 +203,6 @@
     { "path": "public/assets/pouch-front.jpg", "sha256": "<pouch-front-asset-sha256>" },
     { "path": "public/assets/pouch-interior.jpg", "sha256": "<pouch-interior-asset-sha256>" },
     { "path": "public/assets/pouch-rear.jpg", "sha256": "<pouch-rear-asset-sha256>" },
-    { "path": "public/assets/pouch-serial-detail.jpg", "sha256": "<pouch-serial-detail-asset-sha256>" },
     { "path": "evaluation/fixtures.json", "sha256": "<evaluation-fixtures-sha256>" },
     { "path": "evaluation/privacy-canaries.json", "sha256": "<privacy-canaries-sha256>" },
     { "path": "evaluation/results.json", "sha256": "<evaluation-results-sha256>" },

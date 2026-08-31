@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { StaffWorkspace } from "./components/StaffWorkspace.jsx";
 import { ClaimantPortal } from "./components/ClaimantPortal.jsx";
+import { JudgeWalkthrough } from "./components/JudgeWalkthrough.jsx";
 import { RelayTerminal } from "./components/RelayTerminal.jsx";
 import { demoReducer, initialDemoState } from "./demoMachine.js";
 import { resolveDemoAction } from "./demoController.js";
@@ -19,6 +20,7 @@ export function App() {
   const [operatorTokenLoaded, setOperatorTokenLoaded] = useState(false);
   const [staffTokenLoaded, setStaffTokenLoaded] = useState(false);
   const [supervisorTokenLoaded, setSupervisorTokenLoaded] = useState(false);
+  const [judgeWalkthrough, setJudgeWalkthrough] = useState({ status: "idle", data: null, error: "" });
   const apiBase = import.meta.env.VITE_API_BASE_URL || "";
   const serviceClient = useMemo(() => new ServiceDemoClient(apiBase), [apiBase]);
   const scope = useMemo(() => resolveSurfaceScope(window.location.search), []);
@@ -51,6 +53,14 @@ export function App() {
             : "Connected custody service · deterministic fixture analyst",
           payload,
         });
+        if (scope === "staff") {
+          localDispatch({
+            type: "SET_READ_ONLY_NOTICE",
+            message: payload.analyst_mode === "vertex_adk"
+              ? "Live custody service reachable. This tab remains read-only until all three protected runtime roles are loaded."
+              : "Connected deterministic fixture service. This tab remains read-only until all three protected runtime roles are loaded.",
+          });
+        }
         if (scope === "claimant") {
           try {
             const projection = await serviceClient.loadClaimantProjection();
@@ -66,10 +76,34 @@ export function App() {
       .catch((error) => {
         if (error.name !== "AbortError") {
           setConnection({ status: "offline", label: "Offline read-only fixture · no private-answer verification" });
+          if (scope === "staff") {
+            localDispatch({
+              type: "SET_READ_ONLY_NOTICE",
+              message: "Local read-only sample workspace. No private answer check or custody change is available.",
+            });
+          }
         }
       });
     return () => controller.abort();
   }, [apiBase, scope, serviceClient]);
+
+  const refreshJudgeWalkthrough = useCallback(async () => {
+    setJudgeWalkthrough({ status: "loading", data: null, error: "" });
+    try {
+      const response = await fetch(`${apiBase}/api/v1/judge-walkthrough`, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`public walkthrough status ${response.status}`);
+      const data = await response.json();
+      setJudgeWalkthrough({ status: "ready", data, error: "" });
+    } catch {
+      setJudgeWalkthrough({ status: "error", data: null, error: "The hosted read-only case could not be reached from this browser session." });
+    }
+  }, [apiBase]);
+
+  useEffect(() => {
+    if (scope !== "walkthrough") return undefined;
+    void refreshJudgeWalkthrough();
+    return undefined;
+  }, [refreshJudgeWalkthrough, scope]);
 
   const dispatch = useCallback(async (action) => {
     if (busy) return;
@@ -165,7 +199,9 @@ export function App() {
     configureRuntimeCredentials,
   };
 
-  const screen = view === "claimant"
+  const screen = view === "walkthrough"
+    ? <JudgeWalkthrough connection={connection} walkthrough={judgeWalkthrough} onRefresh={refreshJudgeWalkthrough} />
+    : view === "claimant"
     ? <ClaimantPortal {...screenProps} />
     : view === "relay"
       ? <RelayTerminal {...screenProps} />

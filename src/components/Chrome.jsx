@@ -33,7 +33,13 @@ function ViewPicker({ view, setView }) {
 }
 
 export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false }) {
-  const title = view === "staff" ? "Staff Workspace" : view === "claimant" ? "Private Claim Proof" : "SIMULATED Relay Terminal";
+  const title = view === "walkthrough"
+    ? "Judge Walkthrough"
+    : view === "staff"
+      ? "Staff Workspace"
+      : view === "claimant"
+        ? "Private Claim Proof"
+        : "SIMULATED Relay Terminal";
   const policy = chromePolicyFor(view);
   return (
     <>
@@ -46,7 +52,7 @@ export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false
           <>
             <div className="menu-items">
               {['File', 'Edit', 'View', 'Intake', 'Evidence', 'Match', 'Tools', 'Help'].map((label) => (
-                <button type="button" key={label}>{label}</button>
+                <span className="menu-label" key={label}>{label}</span>
               ))}
             </div>
             <div className="menu-session">

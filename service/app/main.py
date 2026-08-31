@@ -31,6 +31,7 @@ from .correlation import (
 )
 from .custody_service import CustodyService
 from .domain import (
+    CustodyState,
     EvidenceVisibility,
     OpaqueTaskPayload,
     RiskTier,
@@ -43,7 +44,7 @@ from .evidence import (
     InMemoryEvidenceStore,
     store_upload_pair,
 )
-from .errors import DomainError, Forbidden
+from .errors import DomainError, Forbidden, NotFound
 from .fixtures import DEMO_CASE_ID, reset_demo_repository
 from .inventory import FixtureInventoryGateway, HttpInventoryGateway, InventoryGateway
 from .outbox import CloudTasksPublisher, InlineTaskPublisher
@@ -318,6 +319,14 @@ def create_app(
                     },
                 )
             status_code = response.status_code
+            is_claim_link_inspection = (
+                request.url.path.startswith("/api/v1/passports/")
+                and request.url.path.endswith("/claim-link")
+            )
+            if request.url.path == "/api/v1/judge-walkthrough" or is_claim_link_inspection:
+                # Preserve the public and claimant projection cache boundaries
+                # for every outcome, including authorization failures.
+                response.headers["Cache-Control"] = "no-store, private"
             response.headers[CORRELATION_HEADER] = correlation_id
             return response
         finally:
@@ -450,6 +459,101 @@ def create_app(
             "authenticated": True,
             "staff_actor_id": settings.staff_actor_id,
             "supervisor_actor_id": settings.supervisor_actor_id,
+        }
+
+    def judge_actor_label(actor: str) -> str:
+        """Project a synthetic event actor without publishing role identifiers."""
+
+        if actor.startswith("agent:"):
+            return "bounded case analyst"
+        if actor.startswith("staff:") or actor.startswith("staff."):
+            return "staff custody action"
+        if actor.startswith("supervisor:") or actor.startswith("supervisor."):
+            return "supervisor approval"
+        if actor.startswith("simulator:"):
+            return "SIMULATED relay service"
+        if actor.startswith("service:"):
+            return "custody service"
+        if actor.startswith("fixture:"):
+            return "synthetic fixture system"
+        return "system actor"
+
+    @application.get("/api/v1/judge-walkthrough")
+    def judge_walkthrough(response: Response):
+        """Return a non-mutating, safe projection of the completed synthetic case.
+
+        The public page is intentionally limited to the fixed synthetic fixture.
+        It never returns claimant answers, credentials, restricted evidence,
+        task bodies, raw actor IDs, idempotency keys, or model trace IDs.
+        """
+
+        if not settings.demo_mode:
+            # The unauthenticated route is intentionally limited to the
+            # configured synthetic demo namespace. Never project a colliding
+            # case from a non-demo deployment.
+            raise NotFound("Judge walkthrough")
+
+        case = repo.get_case(DEMO_CASE_ID)
+        response.headers["Cache-Control"] = "no-store, private"
+        if case.state != CustodyState.CLOSED:
+            return {
+                "schema_version": "1",
+                "kind": "found-roll-judge-walkthrough",
+                "available": False,
+                "read_only": True,
+                "synthetic": True,
+                "case": {"id": case.id},
+                "reason": "The redacted completed-case walkthrough is available after the synthetic Item Passport closes.",
+            }
+
+        manifest = service.build_manifest(case.id)
+        events = repo.list_events(case.id)
+        return {
+            "schema_version": "1",
+            "kind": "found-roll-judge-walkthrough",
+            "available": True,
+            "read_only": True,
+            "synthetic": True,
+            "case": {
+                "id": case.id,
+                "state": case.state,
+                "version": case.version,
+                "category": case.category,
+                "risk_tier": case.risk_tier,
+                "reported_route_count": len(case.report_route),
+            },
+            "agentic": {
+                "mode": case.model_mode or "not_recorded",
+                "model_name": case.model_name or "not_recorded",
+                "model_run_recorded": bool(case.model_run_id),
+                "bounded_tool_step_count": len(case.model_tool_trajectory),
+            },
+            "passport": {
+                "event_count": manifest.event_count,
+                "hash_chain_valid": service.verify_event_chain(case.id),
+                "manifest_id": manifest.manifest_id,
+                "final_event_hash": manifest.final_event_hash,
+                "internally_consistent": manifest.internally_consistent,
+                "physical_transfer_proven": manifest.physical_transfer_proven,
+            },
+            "timeline": [
+                {
+                    "sequence": event.sequence,
+                    "type": event.type,
+                    "from_state": event.from_state,
+                    "to_state": event.to_state,
+                    "actor_label": judge_actor_label(event.actor),
+                    "occurred_at": event.occurred_at,
+                    "event_hash": event.event_hash,
+                }
+                for event in events
+            ],
+            "disclosure": (
+                "This is a read-only projection of a closed synthetic case. It omits private claimant evidence, "
+                "restricted media, credentials, task bodies, raw actor identifiers, and model trace identifiers. "
+                "The event manifest is internally consistent application evidence; it does not prove ownership, "
+                "physical possession, or a real-world transfer."
+            ),
         }
 
     @application.get("/api/v1/passports")
@@ -599,8 +703,10 @@ def create_app(
     @application.get("/api/v1/passports/{case_id}/claim-link")
     def inspect_claim_link(
         case_id: str,
+        response: Response,
         claim_link_token: str | None = Header(default=None, alias="X-Found-Roll-Claim-Link"),
     ):
+        response.headers["Cache-Control"] = "no-store, private"
         return service.inspect_claim_link(case_id, claim_link_token or "")
 
     @application.post("/api/v1/passports/{case_id}/claim-evidence")

@@ -56,19 +56,19 @@ function Toolbar({ onImport }) {
       <button className="import-button" type="button" onClick={onImport}><UploadSimple size={18} weight="bold" /> Import Intake <CaretDown size={12} weight="fill" /></button>
       <span className="toolbar-separator" />
       <div className="icon-cluster">
-        <ToolButton icon={FolderOpen} label="Folders" quiet active />
-        <ToolButton icon={Files} label="Albums" quiet />
+        <ToolButton icon={FolderOpen} label="Folders (current workspace)" quiet active disabled />
+        <ToolButton icon={Files} label="Albums (not available in this sample)" quiet disabled />
       </div>
       <span className="toolbar-separator" />
       <div className="icon-cluster">
-        <ToolButton icon={SquaresFour} label="Thumbnail view" quiet active />
-        <ToolButton icon={ListBullets} label="List view" quiet />
-        <ToolButton icon={ShareNetwork} label="Share case" quiet />
+        <ToolButton icon={SquaresFour} label="Thumbnail view (current workspace)" quiet active disabled />
+        <ToolButton icon={ListBullets} label="List view (not available in this sample)" quiet disabled />
+        <ToolButton icon={ShareNetwork} label="Share case (staff workflow only)" quiet disabled />
       </div>
       <span className="toolbar-separator" />
       <div className="filter-group"><strong>Filters:</strong><span className="filter-chip"><ImageSquare size={15} weight="fill" /> All</span><span className="filter-chip"><LockKey size={14} /> Restricted</span></div>
       <label className="search-box">
-        <input aria-label="Search intake, tags, or notes" placeholder="Search intake, tags, notes…" />
+        <input aria-label="Search is unavailable in this sample workspace" placeholder="Search is unavailable in this sample" disabled />
         <MagnifyingGlass size={17} weight="bold" />
       </label>
     </div>
@@ -266,13 +266,7 @@ function CompareStage({ selectedItemId, items, fixture, demo }) {
     <section className="compare-stage">
       <PhotoPanel photo={primary} />
       <PhotoPanel photo={comparison.secondary} accent />
-      <article className="private-detail-panel">
-        <header><strong>Private detail</strong><span>{comparison.privateDetail.view}</span></header>
-        <div className="detail-photo"><img src={comparison.privateDetail.src} alt="Restricted serial detail" /></div>
-        <p>Captured by staff on Aug 29, 09:42 AM</p>
-        <div className="detail-confirm"><CheckCircle size={16} weight="fill" /> Restricted detail present</div>
-        <div className="restricted-note"><LockKey size={14} weight="fill" /> Expected answer is never sent to the claimant or model.</div>
-      </article>
+      <MediaUnavailable title="Restricted staff detail" icon={LockKey}>This read-only sample never loads restricted evidence. A protected staff session can inspect only the current workflow epoch.</MediaUnavailable>
     </section>
   );
 }
@@ -405,6 +399,7 @@ function CaseInspector({ demo }) {
 }
 
 function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
+  const dialogRef = useRef(null);
   const fileInputRef = useRef(null);
   const previousCredentialsReady = useRef(credentialsReady);
   const [foundAt, setFoundAt] = useState(() => new Date().toISOString());
@@ -464,6 +459,34 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
     previousCredentialsReady.current = credentialsReady;
   }, [credentialsReady]);
 
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  const closeDialog = () => dialogRef.current?.close();
+  const handleNativeClose = () => {
+    resetDraft();
+    onClose();
+  };
+  const trapDialogFocus = (event) => {
+    if (event.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = [...dialog.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => element.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const activeIndex = focusable.indexOf(document.activeElement);
+    const nextIndex = event.shiftKey
+      ? activeIndex <= 0 ? focusable.length - 1 : activeIndex - 1
+      : activeIndex >= focusable.length - 1 ? 0 : activeIndex + 1;
+    event.preventDefault();
+    focusable[nextIndex].focus();
+  };
+
   const intakeStopped = safety !== "ORDINARY_ITEM";
   const guidanceCategory = safety === "SUSPICIOUS_OR_DANGEROUS" ? "suspicious_package" : sensitiveCategory;
   const safetyGuidance = localSafetyGuidance(guidanceCategory, assignedTenant);
@@ -502,15 +525,13 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
       },
     });
     if (accepted) {
-      resetDraft();
-      onClose();
+      closeDialog();
     }
   };
 
   return (
-    <div className="dialog-backdrop" role="presentation" hidden={!open}>
-      <dialog className="intake-dialog" open={open} aria-labelledby="intake-title">
-        <header><div><UploadSimple size={20} weight="bold" /><span id="intake-title">Import Intake</span></div><button type="button" onClick={onClose} aria-label="Close intake"><XCircle size={21} /></button></header>
+      <dialog ref={dialogRef} className="intake-dialog" aria-labelledby="intake-title" onClose={handleNativeClose} onKeyDown={trapDialogFocus}>
+        <header><div><UploadSimple size={20} weight="bold" /><span id="intake-title">Import Intake</span></div><button type="button" onClick={closeDialog} aria-label="Close intake"><XCircle size={21} /></button></header>
         <form onSubmit={submit}>
           <fieldset className="safety-screen">
             <legend>Local safety screen — before photo upload</legend>
@@ -536,10 +557,9 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
             </div>
           )}
 
-          <footer><button type="button" className="secondary-action" onClick={onClose}>{intakeStopped ? "Acknowledge safety stop" : "Cancel"}</button>{safety === "ORDINARY_ITEM" && <button type="submit" className="primary-action" disabled={busy || !credentialsReady}>{busy ? "Importing…" : "Create passport & analyze"}</button>}</footer>
+          <footer><button type="button" className="secondary-action" onClick={closeDialog}>{intakeStopped ? "Acknowledge safety stop" : "Cancel"}</button>{safety === "ORDINARY_ITEM" && <button type="submit" className="primary-action" disabled={busy || !credentialsReady}>{busy ? "Importing…" : "Create passport & analyze"}</button>}</footer>
         </form>
       </dialog>
-    </div>
   );
 }
 
@@ -592,7 +612,7 @@ function BottomActions({ demo, dispatch, setView, busy, operatorTokenLoaded, sta
         const operatorReady = !requiresToken || operatorTokenLoaded;
         const locked = !roleReady || !operatorReady;
         const missingCredentials = [!operatorReady && "operator demo", !roleReady && `${requiresCredential} role`].filter(Boolean).join(" and ");
-        return <button className="primary-action" type="button" onClick={action} disabled={busy || locked} title={locked ? `Load the ${missingCredentials} credential${missingCredentials.includes(" and ") ? "s" : ""} above` : undefined} key={label}><Icon size={20} weight="bold" />{label}</button>;
+        return <span className="primary-action-group" key={label}><button className="primary-action" type="button" onClick={action} disabled={busy || locked} title={locked ? `Load the ${missingCredentials} credential${missingCredentials.includes(" and ") ? "s" : ""} above` : undefined}><Icon size={20} weight="bold" />{label}</button>{locked && <small className="action-lock-reason">Read-only until {missingCredentials} role{missingCredentials.includes(" and ") ? "s are" : " is"} loaded.</small>}</span>;
       })}
     </div>
   );
@@ -624,6 +644,7 @@ export function StaffWorkspace({ demo, dispatch, view, setView, connection, busy
     <div className="staff-workspace">
       <div className="sr-only" aria-live="polite">{demo.lastNotice}</div>
       <WindowChrome view={view} setView={setView} onRefresh={() => dispatch({ type: "REFRESH" })} onSignOut={() => void configureRuntimeCredentials({})} busy={busy} />
+      <div className="staff-narrow-notice" role="status">The staff workspace is optimized for a 1120px+ workstation. Use a wider screen for the protected live workflow.</div>
       <Toolbar onImport={() => setIntakeOpen(true)} />
       <OperatorTokenControl demoLoaded={operatorTokenLoaded} staffLoaded={staffTokenLoaded} supervisorLoaded={supervisorTokenLoaded} configure={configureRuntimeCredentials} connection={connection} />
       <main className="desktop-layout">

@@ -4,7 +4,7 @@ Found Roll is a new hackathon prototype developed for the 2026 All Things Agenti
 
 The interface implementation was initialized with OpenAI's bundled Product Design prototype template. The template-provided hosting worker and build preparation scripts remain in `worker/`, `scripts/prepare-sites-build.mjs`, `.openai/`, and `tests/sites-worker.test.mjs`. The entrant has confirmed the required authorization to publish those supplied files; Found Roll's MIT grant does not relicense them.
 
-The six camera-pouch fixture images in `public/assets/` were generated for this project with OpenAI's built-in image generation tool on August 29, 2026. They depict synthetic objects and fictional contexts; they are not photographs of a real claimant, custodian, or recovered item.
+The five public camera-pouch fixture images in `public/assets/` were generated for this project with OpenAI's built-in image generation tool on August 29, 2026. They depict synthetic objects and fictional contexts; they are not photographs of a real claimant, custodian, or recovered item.
 
 Their checked byte lengths, SHA-256 hashes, intended prototype visibility, and canonical Cloud Storage distinction are recorded in `public/assets/README.md`. Direct package license metadata and the bundled-template boundary are recorded in `THIRD_PARTY_NOTICES.md`.
 

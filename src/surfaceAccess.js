@@ -1,13 +1,14 @@
-const SURFACES = new Set(["staff", "claimant", "relay"]);
+const SURFACES = new Set(["walkthrough", "staff", "claimant", "relay"]);
 
 export function resolveSurfaceScope(search = "") {
   const requested = new URLSearchParams(search).get("view");
-  return SURFACES.has(requested) ? requested : "staff";
+  return SURFACES.has(requested) ? requested : "walkthrough";
 }
 
 export function canNavigateSurface(scope, nextView) {
   if (!SURFACES.has(nextView)) return false;
   if (scope === "staff") return nextView === "staff" || nextView === "relay";
+  if (scope === "walkthrough") return nextView === "walkthrough";
   return scope === nextView;
 }
 
@@ -25,7 +26,9 @@ export function chromePolicyFor(view) {
     showViewPicker: staff,
     showStaffIdentity: staff,
     showReset: staff,
-    scopeLabel: view === "claimant"
+    scopeLabel: view === "walkthrough"
+      ? "Public judge walkthrough · read-only synthetic case"
+      : view === "claimant"
       ? "Private claimant link · no staff access"
       : view === "relay"
         ? "Case-scoped SIMULATED relay terminal · no staff access"

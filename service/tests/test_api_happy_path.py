@@ -4,9 +4,11 @@ from threading import Event, Lock
 import time
 
 from google.adk.agents.invocation_context import InvocationContext, LlmCallsLimitExceededError
+from fastapi.testclient import TestClient
 import pytest
 
 from app.agent import VertexAdkCaseAnalyst
+from app.config import Settings
 from app.custody_service import ANALYSIS_EXECUTION_LEASE
 from app.domain import (
     AgentExecutionEvidence,
@@ -19,8 +21,11 @@ from app.domain import (
     SimulatorHandoffCallback,
 )
 from app.errors import Conflict, DomainError, Unavailable
+from app.fixtures import DEMO_CASE_ID, reset_demo_repository
 from app.hashing import signed_body
+from app.main import create_app
 from app.relay import callback_canonical_json
+from app.repository import InMemoryRepository
 from conftest import STAFF_HEADERS, reserve_and_issue_tokens
 
 
@@ -88,6 +93,84 @@ def test_camera_pouch_workflow_closes_with_consistent_manifest(client, case_id):
     assert manifest["event_count"] == 19
     assert len(manifest["final_event_hash"]) == 64
     assert client.get(f"/api/v1/passports/{case_id}/manifest").json() == manifest
+
+    walkthrough = client.get("/api/v1/judge-walkthrough")
+    assert walkthrough.status_code == 200, walkthrough.text
+    assert walkthrough.headers["cache-control"] == "no-store, private"
+    walkthrough_body = walkthrough.json()
+    assert set(walkthrough_body) == {
+        "schema_version",
+        "kind",
+        "available",
+        "read_only",
+        "synthetic",
+        "case",
+        "agentic",
+        "passport",
+        "timeline",
+        "disclosure",
+    }
+    assert walkthrough_body["available"] is True
+    assert walkthrough_body["read_only"] is True
+    assert walkthrough_body["synthetic"] is True
+    assert set(walkthrough_body["case"]) == {
+        "id",
+        "state",
+        "version",
+        "category",
+        "risk_tier",
+        "reported_route_count",
+    }
+    assert walkthrough_body["case"] == {
+        "id": case_id,
+        "state": "CLOSED",
+        "version": 19,
+        "category": "camera_pouch",
+        "risk_tier": "VALUABLE",
+        "reported_route_count": 3,
+    }
+    assert set(walkthrough_body["agentic"]) == {
+        "mode",
+        "model_name",
+        "model_run_recorded",
+        "bounded_tool_step_count",
+    }
+    case_record = client.app.state.custody_service.repository.get_case(case_id)
+    assert walkthrough_body["agentic"] == {
+        "mode": case_record.model_mode or "not_recorded",
+        "model_name": case_record.model_name or "not_recorded",
+        "model_run_recorded": bool(case_record.model_run_id),
+        "bounded_tool_step_count": len(case_record.model_tool_trajectory),
+    }
+    assert walkthrough_body["passport"] == {
+        "event_count": 19,
+        "hash_chain_valid": True,
+        "manifest_id": manifest["manifest_id"],
+        "final_event_hash": manifest["final_event_hash"],
+        "internally_consistent": True,
+        "physical_transfer_proven": False,
+    }
+    assert len(walkthrough_body["timeline"]) == 19
+    assert all(
+        set(event) == {"sequence", "type", "from_state", "to_state", "actor_label", "occurred_at", "event_hash"}
+        for event in walkthrough_body["timeline"]
+    )
+    assert walkthrough_body["timeline"][-1]["event_hash"] == manifest["final_event_hash"]
+    public_text = walkthrough.text
+    for restricted_value in (
+        "4118",
+        '"claimant_token"',
+        '"custodian_token"',
+        "idempotency",
+        "staff.northport",
+        "supervisor.northport",
+        "Terminal C security return",
+        "NA-PCH-231",
+        "frcl_",
+        "model_run_id",
+        "trace_id",
+    ):
+        assert restricted_value not in public_text
     actor_by_type = {
         event["type"]: event["actor"]
         for event in client.get(f"/api/v1/passports/{case_id}/events").json()["items"]
@@ -117,6 +200,47 @@ def test_camera_pouch_workflow_closes_with_consistent_manifest(client, case_id):
     assert replay_delivery.json()["outbox"]["last_replay_task_name"] == queued_replay.json()["task"]["task_name"]
     after_queued_replay = client.get(f"/api/v1/passports/{case_id}/events").json()["items"]
     assert after_queued_replay == before_queued_replay
+
+
+def test_judge_walkthrough_is_non_mutating_while_the_canonical_case_is_open(client, case_id):
+    before = client.get(f"/api/v1/passports/{case_id}/events").json()["items"]
+    response = client.get("/api/v1/judge-walkthrough")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store, private"
+    assert response.json() == {
+        "schema_version": "1",
+        "kind": "found-roll-judge-walkthrough",
+        "available": False,
+        "read_only": True,
+        "synthetic": True,
+        "case": {"id": case_id},
+        "reason": "The redacted completed-case walkthrough is available after the synthetic Item Passport closes.",
+    }
+    after = client.get(f"/api/v1/passports/{case_id}/events").json()["items"]
+    assert after == before
+
+
+def test_judge_walkthrough_is_hidden_outside_synthetic_demo_mode():
+    settings = Settings(demo_mode=False)
+    repository = InMemoryRepository()
+    reset_demo_repository(repository, settings.secret_pepper, occurred_at=datetime.now(timezone.utc))
+    with TestClient(create_app(settings=settings, repository=repository, seed_demo=False)) as private_client:
+        response = private_client.get("/api/v1/judge-walkthrough")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store, private"
+    assert response.json()["error"]["code"] == "not_found"
+    assert DEMO_CASE_ID not in response.text
+
+
+def test_judge_walkthrough_keeps_no_store_when_the_fixture_is_unavailable():
+    with TestClient(create_app(settings=Settings(), seed_demo=False)) as empty_client:
+        response = empty_client.get("/api/v1/judge-walkthrough")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store, private"
+    assert response.json()["error"]["code"] == "not_found"
 
 
 def test_one_time_token_replay_is_rejected_without_second_event(client, case_id):

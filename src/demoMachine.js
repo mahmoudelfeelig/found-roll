@@ -31,7 +31,7 @@ export const initialDemoState = {
   authoritativeCase: null,
   claimantCase: null,
   events: initialEvents,
-  lastNotice: "Offline fixture only. Connect the custody service to verify private evidence or change custody state.",
+  lastNotice: "Read-only sample workspace. Load all three protected runtime roles before a live case can change.",
 };
 
 export function demoReducer(state, action) {
@@ -50,8 +50,10 @@ export function demoReducer(state, action) {
     case "OFFLINE_ACTION_BLOCKED":
       return {
         ...state,
-        lastNotice: "Offline fixture only. No private answer was checked and no custody state changed.",
+        lastNotice: "No private answer was checked; this read-only sample did not change custody state.",
       };
+    case "SET_READ_ONLY_NOTICE":
+      return { ...state, lastNotice: action.message };
     case "CLAIMANT_LINK_UNAVAILABLE":
       return {
         ...initialDemoState,
