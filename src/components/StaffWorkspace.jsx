@@ -41,6 +41,7 @@ import { claimantProofUrl } from "../surfaceAccess.js";
 import { identityReleaseGate } from "../staffWorkflow.js";
 import { downloadManifest } from "../manifestExport.js";
 import { resolveWorkspaceMedia } from "../workspaceMedia.js";
+import { hasAuthoritativeStaffProjection } from "../staffAccess.js";
 import {
   comparison,
   evidenceTags,
@@ -89,7 +90,7 @@ function OperatorTokenControl({ demoLoaded, staffLoaded, supervisorLoaded, confi
   return (
     <form className="operator-token-strip" onSubmit={submit}>
       <LockKey size={14} weight="fill" />
-      <strong>Connected demo mutations</strong>
+      <strong>Protected runtime session</strong>
       <span>{demoLoaded && staffLoaded && supervisorLoaded ? "Operator, staff, and supervisor credentials loaded in memory" : "Separate runtime role credentials required for the full custody flow"}</span>
       <input
         type="password"
@@ -511,6 +512,7 @@ function IntakeDialog({ open, onClose, dispatch, busy, credentialsReady }) {
     };
     const accepted = await dispatch({
       type: "IMPORT_INTAKE",
+      onQueued: closeDialog,
       intake: {
         assignedTenant,
         category,
@@ -642,7 +644,30 @@ function EventDialog({ demo }) {
   );
 }
 
-export function StaffWorkspace({ demo, dispatch, view, setView, connection, busy, operatorTokenLoaded, staffTokenLoaded, supervisorTokenLoaded, configureRuntimeCredentials }) {
+function LockedStaffWorkspace({ view, setView, connection, busy, operatorTokenLoaded, staffTokenLoaded, supervisorTokenLoaded, configureRuntimeCredentials }) {
+  return (
+    <div className="staff-workspace locked-staff-workspace">
+      <div className="sr-only" aria-live="polite">Protected staff workspace. No case or agent activity is loaded.</div>
+      <WindowChrome view={view} setView={setView} busy={busy} authenticated={false} />
+      <div className="staff-narrow-notice" role="status">The staff workspace is optimized for a 1120px+ workstation. Use a wider screen for the protected live workflow.</div>
+      <OperatorTokenControl demoLoaded={operatorTokenLoaded} staffLoaded={staffTokenLoaded} supervisorLoaded={supervisorTokenLoaded} configure={configureRuntimeCredentials} connection={connection} />
+      <main className="locked-staff-panel" aria-labelledby="locked-staff-title">
+        <section>
+          <LockKey size={40} weight="duotone" aria-hidden="true" />
+          <div>
+            <span className="locked-staff-eyebrow">AUTHORITATIVE PROJECTION REQUIRED</span>
+            <h1 id="locked-staff-title">Staff workspace locked</h1>
+            <p>Load the separate operator, staff, and supervisor runtime credentials above to request one authoritative case projection from the custody service.</p>
+            <small>Until that succeeds, this surface intentionally shows no case, evidence, candidate, timeline, or agent-run data.</small>
+          </div>
+        </section>
+      </main>
+      <div className="status-bar locked-staff-status"><span className={`connection-${connection.status}`}><CloudCheck size={15} weight="fill" /> {connection.label}</span><span><HardDrives size={15} /> No staff case loaded</span><span><ShieldCheck size={15} /> Protected data remains undisclosed</span></div>
+    </div>
+  );
+}
+
+function AuthenticatedStaffWorkspace({ demo, dispatch, view, setView, connection, busy, operatorTokenLoaded, staffTokenLoaded, supervisorTokenLoaded, configureRuntimeCredentials }) {
   const media = resolveWorkspaceMedia(demo);
   const [activeFolder, setActiveFolder] = useState(media.defaultFolder);
   const [selectedItemId, setSelectedItemId] = useState(media.defaultSelectedItemId);
@@ -654,7 +679,7 @@ export function StaffWorkspace({ demo, dispatch, view, setView, connection, busy
   return (
     <div className="staff-workspace">
       <div className="sr-only" aria-live="polite">{demo.lastNotice}</div>
-      <WindowChrome view={view} setView={setView} onRefresh={() => dispatch({ type: "REFRESH" })} onSignOut={() => void configureRuntimeCredentials({})} busy={busy} />
+      <WindowChrome view={view} setView={setView} onRefresh={() => dispatch({ type: "REFRESH" })} onSignOut={() => void configureRuntimeCredentials({})} busy={busy} authenticated />
       <div className="staff-narrow-notice" role="status">The staff workspace is optimized for a 1120px+ workstation. Use a wider screen for the protected live workflow.</div>
       <Toolbar onImport={() => setIntakeOpen(true)} />
       <OperatorTokenControl demoLoaded={operatorTokenLoaded} staffLoaded={staffTokenLoaded} supervisorLoaded={supervisorTokenLoaded} configure={configureRuntimeCredentials} connection={connection} />
@@ -669,4 +694,10 @@ export function StaffWorkspace({ demo, dispatch, view, setView, connection, busy
       <IntakeDialog open={intakeOpen} onClose={() => setIntakeOpen(false)} dispatch={dispatch} busy={busy} credentialsReady={operatorTokenLoaded && staffTokenLoaded} />
     </div>
   );
+}
+
+export function StaffWorkspace(props) {
+  const staffProjectionReady = hasAuthoritativeStaffProjection(props);
+  if (!staffProjectionReady) return <LockedStaffWorkspace {...props} />;
+  return <AuthenticatedStaffWorkspace {...props} />;
 }

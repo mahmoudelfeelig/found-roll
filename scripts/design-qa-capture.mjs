@@ -6,7 +6,7 @@ import { chromium } from "playwright-core";
 const root = path.resolve(import.meta.dirname, "..");
 const outputDir = path.join(root, "artifacts", "design-qa");
 const liveMode = Boolean(process.env.FOUND_ROLL_URL);
-const baseUrl = process.env.FOUND_ROLL_URL || "http://127.0.0.1:5173";
+const baseUrl = process.env.FOUND_ROLL_URL || process.env.FOUND_ROLL_QA_BASE_URL || "http://127.0.0.1:5173";
 const executablePath = process.env.CHROME_PATH || "C:/Program Files/Google/Chrome/Application/chrome.exe";
 
 const walkthroughFixture = {
@@ -161,48 +161,14 @@ try {
 
   await page.setViewportSize({ width: 1440, height: 960 });
   await go("/?view=staff");
-  const intakeTrigger = page.getByRole("button", { name: "Import Intake" }).first();
-  await intakeTrigger.click();
-  const intakeDialog = page.locator("dialog.intake-dialog");
-  await intakeDialog.waitFor({ state: "visible" });
-  const modalState = await page.evaluate(() => {
-    const dialog = document.querySelector("dialog.intake-dialog");
-    return {
-      open: dialog?.open,
-      modal: dialog?.matches(":modal"),
-      focusInside: Boolean(dialog?.contains(document.activeElement)),
-    };
-  });
-  recordAssertion("intake uses a native modal dialog with managed focus", modalState.open && modalState.modal && modalState.focusInside, modalState);
-  for (let index = 0; index < 14; index += 1) {
-    await page.keyboard.press("Tab");
-    const focusState = await page.evaluate(() => {
-      const dialog = document.querySelector("dialog.intake-dialog");
-      const active = document.activeElement;
-      return {
-        focusInside: Boolean(dialog?.contains(active)),
-        activeElement: active?.tagName,
-        activeLabel: active?.getAttribute("aria-label") || active?.textContent?.trim().slice(0, 60) || "",
-      };
-    });
-    recordAssertion(`intake focus remains modal after Tab ${index + 1}`, focusState.focusInside, focusState);
-  }
-  await screenshot("staff-intake-1440x960.png");
-  await page.keyboard.press("Escape");
-  await intakeDialog.waitFor({ state: "hidden" });
-  const focusRestored = await intakeTrigger.evaluate((element) => document.activeElement === element);
-  recordAssertion("Escape closes intake and restores its trigger focus", focusRestored);
-
-  await intakeTrigger.click();
-  await intakeDialog.waitFor({ state: "visible" });
-  const lockedCreate = page.getByRole("button", { name: "Create passport & analyze" });
-  recordAssertion("credential-gated intake action is disabled", await lockedCreate.isDisabled());
-  const lockedStyle = await lockedCreate.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { cursor: style.cursor, color: style.color, backgroundImage: style.backgroundImage };
-  });
-  recordAssertion("credential-gated intake action is visually disabled", lockedStyle.cursor === "not-allowed" && !lockedStyle.color.includes("255, 255, 255"), lockedStyle);
-  await page.keyboard.press("Escape");
+  await page.getByRole("heading", { name: "Staff workspace locked" }).waitFor();
+  recordAssertion("unauthenticated staff shell remains locked", await page.getByText("AUTHORITATIVE PROJECTION REQUIRED", { exact: true }).isVisible());
+  recordAssertion("locked staff shell exposes no intake mutation", await page.getByRole("button", { name: "Import Intake" }).count() === 0);
+  recordAssertion("locked staff shell exposes no case or agent activity", (
+    await page.getByText(/Case Analyst|Item Passport|Candidate packet/i).count()
+  ) === 0);
+  recordAssertion("locked staff shell mounts no intake modal", await page.locator("dialog.intake-dialog").count() === 0);
+  await screenshot("staff-locked-1440x960.png");
 
   await page.setViewportSize({ width: 900, height: 800 });
   await go("/?view=staff");

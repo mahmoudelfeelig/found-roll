@@ -76,14 +76,6 @@ export const question = {
   helper: "This answer is compared privately with staff evidence. It is never added to the public listing.",
 };
 
-export const initialEvents = [
-  { id: "evt-001", time: "09:41:06", label: "Intake received", detail: "Northport Air · Counter B", actor: "M. Chen" },
-  { id: "evt-002", time: "09:41:09", label: "Safety screen passed", detail: "Ordinary intake allowed", actor: "Policy v1.4" },
-  { id: "evt-003", time: "09:41:22", label: "Evidence structured", detail: "Gemini 3.5 Flash · ADK run 88F2", actor: "Case Analyst" },
-  { id: "evt-004", time: "09:41:28", label: "Three custodians searched", detail: "8 candidates → 2 plausible", actor: "Case Analyst" },
-  { id: "evt-005", time: "09:41:30", label: "Visual-only acceptance refused", detail: "Private discriminator required", actor: "Policy v1.4" },
-];
-
 export const stateSteps = [
   { key: "FOUND", label: "FOUND" },
   { key: "CANDIDATE", label: "CANDIDATE" },

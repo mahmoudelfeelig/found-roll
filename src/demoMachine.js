@@ -1,4 +1,4 @@
-import { caseId, initialEvents } from "./demoData.js";
+import { caseId } from "./demoData.js";
 
 function emptyCredential(role) {
   return {
@@ -30,8 +30,8 @@ export const initialDemoState = {
   manifest: null,
   authoritativeCase: null,
   claimantCase: null,
-  events: initialEvents,
-  lastNotice: "Read-only sample workspace. Load all three protected runtime roles before a live case can change.",
+  events: [],
+  lastNotice: "Protected staff workspace. Load all three runtime roles before any authoritative case projection is requested.",
 };
 
 export function demoReducer(state, action) {

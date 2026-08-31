@@ -11,7 +11,7 @@
   },
   "failed_count": 0,
   "fixture_count": 15,
-  "generated_at": "2026-08-31T12:51:10.344474+00:00",
+  "generated_at": "2026-08-31T15:03:57.996911+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",
@@ -181,7 +181,6 @@
         "abstained_from_claim_acceptance": true,
         "analyst_mode": "deterministic_fixture_no_model",
         "fixture_tool_trajectory": [
-          "search_custodian:grand-hall",
           "search_custodian:metro-loop",
           "search_custodian:northport-air",
           "load_candidate:NA-PCH-231",

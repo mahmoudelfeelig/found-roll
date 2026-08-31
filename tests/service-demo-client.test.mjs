@@ -722,8 +722,14 @@ test("connected intake uses separate operator and staff boundaries while the ser
       },
     };
   };
+  let releaseQueuedTask;
+  const queuedTaskCompletion = new Promise((resolve) => { releaseQueuedTask = resolve; });
+  let markQueuedTaskStarted;
+  const queuedTaskStarted = new Promise((resolve) => { markQueuedTaskStarted = resolve; });
   client.completeTask = async (analysisJob, expectedState) => {
     calls.push({ kind: "queued-analysis", analysisJob, expectedState });
+    markQueuedTaskStarted();
+    await queuedTaskCompletion;
     client.case = { id: client.caseId, state: "CLARIFICATION_REQUIRED", version: 5 };
   };
   client.readStaffEvidence = async (evidenceId) => {
@@ -731,8 +737,9 @@ test("connected intake uses separate operator and staff boundaries while the ser
     return new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" });
   };
   const file = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "intake.jpg", { type: "image/jpeg" });
+  const queuedProjections = [];
 
-  await client.importIntake({
+  const importPromise = client.importIntake({
     assignedTenant: "northport-air",
     currentHolder: "Northport Air secure dropbox",
     publicDescription: "Synthetic camera pouch used for connected intake testing.",
@@ -741,7 +748,10 @@ test("connected intake uses separate operator and staff boundaries while the ser
     reportRoute: ["Metro Loop", "Northport Air"],
     authorizePreviewForModel: true,
     file,
+  }, {
+    onQueuedProjection: (projection) => queuedProjections.push(projection),
   });
+  await queuedTaskStarted;
 
   assert.equal(calls[0].path, "/api/v1/intakes");
   assert.equal(JSON.parse(calls[0].options.body).safety_result, "ORDINARY_ITEM");
@@ -763,6 +773,25 @@ test("connected intake uses separate operator and staff boundaries while the ser
   assert.equal(client.intakeEvidence.filename, "intake.jpg");
   assert.equal(client.intakeEvidence.displaySource, "server-derived-preview");
   assert.match(client.intakeEvidence.src, /^blob:/);
+  assert.deepEqual(queuedProjections.map((projection) => ({
+    authoritative: projection.authoritative,
+    source: projection.source,
+    caseId: projection.caseId,
+    state: projection.state,
+    version: projection.version,
+  })), [{
+    authoritative: true,
+    source: "service",
+    caseId: "case-imported-001",
+    state: "ANALYZING",
+    version: 3,
+  }]);
+  let importSettled = false;
+  void importPromise.then(() => { importSettled = true; });
+  await Promise.resolve();
+  assert.equal(importSettled, false, "the queued projection must render before task completion settles the intake command");
+  releaseQueuedTask();
+  await importPromise;
 });
 
 test("retrying a failed evidence upload resumes the same intake command and case", async () => {
@@ -859,6 +888,7 @@ test("an ambiguous intake upload observes an already-queued analysis without pos
     throw new Error("The browser must not create an analysis command after an ambiguous upload.");
   };
   const file = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "ambiguous.jpg", { type: "image/jpeg" });
+  const queuedProjections = [];
 
   await client.importIntake({
     assignedTenant: "northport-air",
@@ -869,10 +899,23 @@ test("an ambiguous intake upload observes an already-queued analysis without pos
     reportRoute: ["Metro Loop", "Northport Air"],
     authorizePreviewForModel: true,
     file,
+  }, {
+    onQueuedProjection: (projection) => queuedProjections.push(projection),
   });
 
   assert.equal(observedState, "CLARIFICATION_REQUIRED");
   assert.equal(calls.some((call) => call.path.endsWith("/analysis-jobs")), false);
+  assert.deepEqual(queuedProjections.map((projection) => ({
+    authoritative: projection.authoritative,
+    caseId: projection.caseId,
+    state: projection.state,
+    version: projection.version,
+  })), [{
+    authoritative: true,
+    caseId: "case-ambiguous-001",
+    state: "ANALYZING",
+    version: 3,
+  }]);
 });
 
 test("manual analysis remains available only for the deliberately unarmed fixture", async () => {

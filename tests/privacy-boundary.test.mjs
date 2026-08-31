@@ -134,6 +134,30 @@ test("connected actions resolve only to an authoritative hydrate action", async 
   assert.notStrictEqual(result, originalAction);
 });
 
+test("connected intake may publish an authoritative queued projection before its final hydrate", async () => {
+  const originalAction = { type: "IMPORT_INTAKE", intake: { useSyntheticFixture: true } };
+  const queuedProjection = { authoritative: true, caseId: "case-queued-001", state: "ANALYZING", version: 3 };
+  const finalProjection = { authoritative: true, caseId: "case-queued-001", state: "CLARIFICATION_REQUIRED", version: 5 };
+  const published = [];
+  const client = {
+    async perform(action, { onQueuedProjection }) {
+      assert.equal(action, originalAction);
+      onQueuedProjection(queuedProjection);
+      return finalProjection;
+    },
+  };
+
+  const result = await resolveDemoAction({
+    action: originalAction,
+    connected: true,
+    client,
+    onQueuedProjection: (projection) => published.push(projection),
+  });
+
+  assert.deepEqual(published, [queuedProjection]);
+  assert.deepEqual(result, { type: "HYDRATE_SERVICE", payload: finalProjection });
+});
+
 test("offline actions are blocked except for resetting the read-only fixture", async () => {
   const client = { perform: async () => assert.fail("offline mode must not call the custody service") };
   assert.deepEqual(

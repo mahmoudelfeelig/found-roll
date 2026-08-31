@@ -8,7 +8,7 @@ Public source: [github.com/mahmoudelfeelig/found-roll](https://github.com/mahmou
 
 ## What the demo proves
 
-- One report searches the fictional Grand Hall, Metro Loop, and Northport Air inventories.
+- One report begins with a fictional Grand Hall → Metro Loop → Northport Air route; the custody engine sends the analyst only to the currently eligible custodian inventories.
 - An ordinary intake is armed only after the combined demo-and-staff boundary accepts it. Once staff explicitly authorizes a derived model preview, the service itself commits the bounded-analysis outbox command for that immutable pair and queues it; the browser only observes and polls the result. The public manual-analysis route refuses armed intakes.
 - Visual similarity alone is refused. The deterministic custody engine fixes the eligible candidate packet; the bounded analyst inspects it and proposes one non-leading question, but cannot accept a claim or mutate custody.
 - The valuable camera-pouch fixture needs an exact private serial fragment, a staff identity attestation, and supervisor approval.
@@ -23,7 +23,7 @@ Northport Air, Metro Loop, Grand Hall, Relay Post, every inventory row, every ro
 
 The hosted root is a public, non-mutating Judge Walkthrough for the fixed completed synthetic case. It accepts no credentials and exposes only a redacted status/timeline, bounded-analyst metadata, and internal manifest-consistency summary. It omits claimant evidence, restricted media, task bodies, raw actor IDs, idempotency keys, and model trace IDs; it neither proves ownership nor possession nor performs a physical handoff.
 
-The staff workspace contains the custodian folder tree, dated evidence library, candidate metadata comparison, staff-only detail, evidence tray, release-policy inspector, credential state, and Item Passport playback in one dense desktop shell. Once authenticated, it loads the active server-derived preview for the current workflow epoch. If that preview is unavailable, the workspace shows an unavailable state rather than substituting unrelated fixture media.
+The staff workspace contains the custodian folder tree, dated evidence library, candidate metadata comparison, staff-only detail, evidence tray, release-policy inspector, credential state, and Item Passport playback in one dense desktop shell. Before all three runtime roles authenticate and the service returns an authoritative projection, that URL is a neutral locked shell with no case, candidate, timeline, or agent-run data. Once authenticated, it loads the active server-derived preview for the current workflow epoch. If that preview is unavailable, the workspace shows an unavailable state rather than substituting unrelated fixture media.
 
 The private claimant proof page exposes one non-leading question and no candidate library or staff-only evidence. Its one-time link is bound to one case version and expiry: only a keyed digest is persisted, while the raw token travels in the URL fragment, is immediately removed from the address bar, and remains in that browser tab's memory. A submission consumes the link; a wrong answer rotates it to the new case version, and expired, replayed, wrong-case, or stale-version links fail closed.
 

@@ -95,6 +95,10 @@ class FixtureCaseAnalyst:
     ) -> tuple[str, AnalysisProposal]:
         ranked = deterministic_candidate_packet(case, candidates)
         selected = ranked[0]
+        # Keep the local fixture honest about the same hard-filtered packet
+        # that the live ADK path receives. An ineligible custodian is never
+        # represented as a successful analyst search.
+        authorized_tenants = sorted({item.tenant_id for item in ranked})
         proposal = AnalysisProposal(
             ranked_candidate_ids=[item.id for item in ranked],
             selected_candidate_id=selected.id,
@@ -103,9 +107,7 @@ class FixtureCaseAnalyst:
             restricted_attribute_id=selected.restricted_attribute_id or "staff_private_discriminator",
             next_question="What are the final four characters on the lens serial label kept inside the pouch?",
             tool_trajectory=[
-                "search_custodian:grand-hall",
-                "search_custodian:metro-loop",
-                "search_custodian:northport-air",
+                *(f"search_custodian:{tenant_id}" for tenant_id in authorized_tenants),
                 f"load_candidate:{selected.id}",
                 "submit_observations",
                 "propose_discriminator:lens_serial_last4",

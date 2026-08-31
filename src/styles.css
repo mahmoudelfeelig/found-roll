@@ -200,6 +200,11 @@ select:focus-visible {
   color: #25292d;
 }
 
+.staff-locked {
+  color: #725820;
+  font-weight: 700;
+}
+
 .sign-out {
   display: flex;
   align-items: center;
@@ -1442,6 +1447,71 @@ input:disabled {
   background: #fff4d3;
   color: #654d24;
   font-size: 11px;
+}
+
+.locked-staff-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 44px 56px;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(rgba(255,255,255,.55), rgba(255,255,255,.55)),
+    repeating-linear-gradient(0deg, #edf0f2 0, #edf0f2 1px, #e7eaec 1px, #e7eaec 3px);
+}
+
+.locked-staff-panel section {
+  width: min(690px, 100%);
+  padding: 30px 34px;
+  border: 1px solid #aeb5bb;
+  border-radius: 3px;
+  background: linear-gradient(#fff, #f0f2f3);
+  box-shadow: inset 0 1px #fff, 0 12px 32px rgba(34, 42, 49, .16);
+  display: flex;
+  align-items: flex-start;
+  gap: 19px;
+  color: #374049;
+}
+
+.locked-staff-panel section > svg {
+  flex: 0 0 auto;
+  color: #8b6826;
+}
+
+.locked-staff-eyebrow {
+  display: block;
+  margin-bottom: 7px;
+  color: #84622a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .09em;
+}
+
+.locked-staff-panel h1 {
+  margin: 0 0 8px;
+  color: #252b30;
+  font-size: 21px;
+  line-height: 1.15;
+}
+
+.locked-staff-panel p {
+  max-width: 530px;
+  margin: 0 0 11px;
+  color: #4e5860;
+  font-size: 13px;
+  line-height: 1.52;
+}
+
+.locked-staff-panel small {
+  display: block;
+  max-width: 540px;
+  color: #6a737a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.locked-staff-status {
+  margin-top: auto;
 }
 
 /* Public route: dense early-2010s desktop record review, not a landing page. */

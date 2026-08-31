@@ -1,5 +1,6 @@
 import {
   CaretDown,
+  LockKey,
   SignOut,
 } from "@phosphor-icons/react";
 import { chromePolicyFor } from "../surfaceAccess.js";
@@ -32,7 +33,7 @@ function ViewPicker({ view, setView }) {
   );
 }
 
-export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false }) {
+export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false, authenticated = false }) {
   const title = view === "walkthrough"
     ? "Judge Walkthrough"
     : view === "staff"
@@ -56,10 +57,12 @@ export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false
               ))}
             </div>
             <div className="menu-session">
-              {policy.showViewPicker && <ViewPicker view={view} setView={setView} />}
-              {policy.showReset && <button type="button" className="text-command" onClick={onRefresh} disabled={busy}>Refresh case</button>}
-              {policy.showStaffIdentity && <span className="staff-name">Authenticated staff <CaretDown size={11} weight="fill" /></span>}
-              {policy.showStaffIdentity && <button className="sign-out" type="button" onClick={onSignOut} disabled={busy || !onSignOut}><SignOut size={14} /> Sign out</button>}
+              {authenticated && policy.showViewPicker && <ViewPicker view={view} setView={setView} />}
+              {authenticated && policy.showReset && <button type="button" className="text-command" onClick={onRefresh} disabled={busy}>Refresh case</button>}
+              {policy.showStaffIdentity && (authenticated
+                ? <span className="staff-name">Authenticated staff <CaretDown size={11} weight="fill" /></span>
+                : <span className="staff-name staff-locked"><LockKey size={12} weight="fill" /> Protected staff workspace — credentials required</span>)}
+              {authenticated && policy.showStaffIdentity && <button className="sign-out" type="button" onClick={onSignOut} disabled={busy || !onSignOut}><SignOut size={14} /> Sign out</button>}
             </div>
           </>
         ) : (

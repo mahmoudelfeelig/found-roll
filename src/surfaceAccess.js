@@ -32,6 +32,6 @@ export function chromePolicyFor(view) {
       ? "Private claimant link · no staff access"
       : view === "relay"
         ? "Case-scoped SIMULATED relay terminal · no staff access"
-        : "Authenticated staff surface",
+      : "Protected staff surface",
   };
 }

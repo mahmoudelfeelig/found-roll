@@ -15,6 +15,7 @@ from google.genai.types import (
 )
 
 from app.agent import (
+    FixtureCaseAnalyst,
     VertexAdkCaseAnalyst,
     _observed_execution_evidence,
     _tool_outcome,
@@ -92,6 +93,25 @@ def test_pinned_adk_builds_bounded_typed_agent_without_network_access(monkeypatc
     analyst._configure_vertex_environment()
     assert __import__("os").environ["GOOGLE_GENAI_USE_ENTERPRISE"] == "TRUE"
     assert __import__("os").environ["GOOGLE_GENAI_USE_VERTEXAI"] == "true"
+
+
+def test_fixture_analyst_reports_only_hard_filter_eligible_custodian_searches():
+    _run_id, proposal = FixtureCaseAnalyst().analyze(
+        fixture_case(),
+        fixture_candidates("test-pepper"),
+    )
+
+    searches = [
+        entry
+        for entry in proposal.tool_trajectory
+        if entry.startswith("search_custodian:")
+    ]
+
+    assert searches == [
+        "search_custodian:metro-loop",
+        "search_custodian:northport-air",
+    ]
+    assert "search_custodian:grand-hall" not in searches
 
 
 def test_analysis_schema_is_vertex_compatible_and_keeps_claim_authority_fail_closed():

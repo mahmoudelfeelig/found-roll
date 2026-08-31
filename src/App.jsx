@@ -16,6 +16,7 @@ export function App() {
   const [demo, localDispatch] = useReducer(demoReducer, initialDemoState);
   const [connection, setConnection] = useState({ status: "checking", label: "Checking custody service…" });
   const [busy, setBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState("");
   const [operationError, setOperationError] = useState("");
   const [operatorTokenLoaded, setOperatorTokenLoaded] = useState(false);
   const [staffTokenLoaded, setStaffTokenLoaded] = useState(false);
@@ -105,19 +106,36 @@ export function App() {
     return undefined;
   }, [refreshJudgeWalkthrough, scope]);
 
+  const hydrateAuthoritativeProjection = useCallback((projection) => {
+    if (!projection?.authoritative) return;
+    localDispatch({ type: "HYDRATE_SERVICE", payload: projection });
+    if (projection.caseId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("case", projection.caseId);
+      window.history.replaceState({}, "", url);
+    }
+  }, []);
+
   const dispatch = useCallback(async (action) => {
     if (busy) return;
     const connected = connection.status === "live" || connection.status === "fixture";
     setBusy(true);
+    setBusyMessage("Custody service is committing this step…");
     setOperationError("");
     try {
-      const resolved = await resolveDemoAction({ action, connected, client: serviceClient });
-      localDispatch(resolved);
-      if (resolved.payload?.caseId) {
-        const url = new URL(window.location.href);
-        url.searchParams.set("case", resolved.payload.caseId);
-        window.history.replaceState({}, "", url);
-      }
+      const resolved = await resolveDemoAction({
+        action,
+        connected,
+        client: serviceClient,
+        onQueuedProjection: (projection) => {
+          if (!projection?.authoritative) return;
+          hydrateAuthoritativeProjection(projection);
+          setBusyMessage("Analysis is queued on the custody service. Waiting for its authoritative result…");
+          if (action.type === "IMPORT_INTAKE" && typeof action.onQueued === "function") action.onQueued();
+        },
+      });
+      if (resolved.type === "HYDRATE_SERVICE") hydrateAuthoritativeProjection(resolved.payload);
+      else localDispatch(resolved);
       return resolved.payload;
     } catch (error) {
       setOperationError(error?.message || "The custody service stopped this step.");
@@ -136,8 +154,9 @@ export function App() {
       return false;
     } finally {
       setBusy(false);
+      setBusyMessage("");
     }
-  }, [busy, connection.status, scope, serviceClient]);
+  }, [busy, connection.status, hydrateAuthoritativeProjection, scope, serviceClient]);
 
   const setView = (nextView) => {
     if (!canNavigateSurface(scope, nextView)) return false;
@@ -212,7 +231,7 @@ export function App() {
       {screen}
       {(busy || operationError) && (
         <div className={`service-operation-note${operationError ? " is-error" : ""}`} role={operationError ? "alert" : "status"} aria-live="polite">
-          {operationError || "Custody service is committing this step…"}
+          {operationError || busyMessage || "Custody service is committing this step…"}
         </div>
       )}
     </>

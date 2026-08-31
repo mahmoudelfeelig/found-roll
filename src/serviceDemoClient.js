@@ -436,6 +436,29 @@ export class ServiceDemoClient {
     return snapshot;
   }
 
+  projectionSession() {
+    return {
+      tokens: this.tokens,
+      manifest: this.manifest,
+      tokenReplayRejected: this.tokenReplayRejected,
+      callbackReplayHandled: this.callbackReplayHandled,
+      claimLink: this.claimLink,
+      intakeEvidence: this.intakeEvidence,
+    };
+  }
+
+  projectKnownCase(custodyCase = this.case) {
+    if (!custodyCase) throw new Error("Custody service did not return an authoritative case projection.");
+    return projectCustodySnapshot({
+      case: custodyCase,
+      handoff: this.handoff,
+      events: [],
+      candidates: [],
+      execution: null,
+      disclosure: null,
+    }, this.projectionSession());
+  }
+
   async loadProjection() {
     const snapshot = await this.snapshot();
     await this.loadCurrentEvidencePreview(snapshot.case);
@@ -462,14 +485,7 @@ export class ServiceDemoClient {
         headers: this.staffToken ? { "X-Found-Roll-Staff-Token": this.staffToken } : {},
       });
     }
-    return projectCustodySnapshot(snapshot, {
-      tokens: this.tokens,
-      manifest: this.manifest,
-      tokenReplayRejected: this.tokenReplayRejected,
-      callbackReplayHandled: this.callbackReplayHandled,
-      claimLink: this.claimLink,
-      intakeEvidence: this.intakeEvidence,
-    });
+    return projectCustodySnapshot(snapshot, this.projectionSession());
   }
 
   async loadCurrentEvidencePreview(custodyCase = this.case) {
@@ -657,7 +673,7 @@ export class ServiceDemoClient {
     });
   }
 
-  async importIntake(intake) {
+  async importIntake(intake, { onQueuedProjection } = {}) {
     if (!this.demoToken) {
       throw new Error("Load the operator demo credential before creating an intake.");
     }
@@ -749,14 +765,20 @@ export class ServiceDemoClient {
       src: objectUrl || null,
       objectUrl: objectUrl || null,
     });
+    const publishQueuedProjection = () => {
+      if (this.case?.state !== "ANALYZING" || typeof onQueuedProjection !== "function") return;
+      onQueuedProjection(this.projectKnownCase());
+    };
     if (uploaded.analysis_job) {
       this.case = uploaded.analysis_job.case;
+      publishQueuedProjection();
       await this.completeTask(uploaded.analysis_job, "CLARIFICATION_REQUIRED");
     } else {
       const current = await this.snapshot();
       // A response can be lost after the server committed the background command.
       // In that case the retry observes the running task instead of issuing one.
       if (current.case.state === "ANALYZING") {
+        publishQueuedProjection();
         await this.waitForState("CLARIFICATION_REQUIRED");
       }
     }
@@ -896,7 +918,7 @@ export class ServiceDemoClient {
     throw new Error("Timed out waiting for the authenticated duplicate Cloud Task delivery.");
   }
 
-  async perform(action) {
+  async perform(action, { onQueuedProjection } = {}) {
     if (action.type === "REFRESH") return this.loadProjection();
     if (!this.case) await this.snapshot();
     switch (action.type) {
@@ -916,7 +938,7 @@ export class ServiceDemoClient {
         if (!this.claimLink?.token) await this.issueClaimLink();
         break;
       case "IMPORT_INTAKE":
-        await this.importIntake(action.intake || {});
+        await this.importIntake(action.intake || {}, { onQueuedProjection });
         break;
       case "ATTEST_IDENTITY":
         await this.attestIdentity();
