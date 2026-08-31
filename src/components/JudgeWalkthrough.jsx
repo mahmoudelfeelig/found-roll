@@ -27,12 +27,12 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
       <WindowChrome view="walkthrough" setView={() => false} />
       <section className="judge-intro">
         <div>
-          <span className="judge-kicker"><Eye size={14} weight="fill" /> PUBLIC · READ-ONLY</span>
-          <h1>Inspect the redacted completed case</h1>
-          <p>Review the live service’s synthetic Item Passport without credentials, media access, claimant evidence, or mutation authority.</p>
+          <span className="judge-kicker"><Eye size={14} weight="fill" /> PUBLIC CASE VIEW · READ-ONLY</span>
+          <h1>See how this lost-item case was resolved</h1>
+          <p>This safe public view shows the redacted outcome. Private evidence and staff actions stay protected.</p>
         </div>
         <button className="secondary-action judge-refresh" type="button" onClick={onRefresh} disabled={loading}>
-          <ArrowsClockwise size={17} weight="bold" /> {loading ? "Refreshing…" : "Refresh live record"}
+          <ArrowsClockwise size={17} weight="bold" /> {loading ? "Refreshing…" : "Refresh case status"}
         </button>
       </section>
 
@@ -44,7 +44,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
         <section className="judge-unavailable" role="status">
           <WarningCircle size={28} weight="fill" />
           <div>
-            <strong>Completed walkthrough not available yet</strong>
+            <strong>This case is still being processed</strong>
             <p>{data?.reason || walkthrough.error || "The hosted public record could not be read. No private case data is shown."}</p>
           </div>
         </section>
@@ -53,7 +53,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
       {!loading && available && (
         <main className="judge-grid">
           <section className="judge-case-card" aria-labelledby="judge-case-title">
-            <header><div><ShieldCheck size={20} weight="fill" /><span id="judge-case-title">Closed Item Passport</span></div><b>{titleCase(data.case.state)}</b></header>
+            <header><div><ShieldCheck size={20} weight="fill" /><span id="judge-case-title">Case record</span></div><b>{titleCase(data.case.state)}</b></header>
             <div className="judge-case-content">
               <figure>
                 <img src="/assets/pouch-front.jpg" alt="Synthetic black camera pouch used in the public walkthrough" />
@@ -70,18 +70,18 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
           </section>
 
           <section className="judge-agent-card" aria-labelledby="judge-agent-title">
-            <header><CloudCheck size={20} weight="fill" /><span id="judge-agent-title">Bounded Case Analyst</span></header>
+            <header><CloudCheck size={20} weight="fill" /><span id="judge-agent-title">AI-assisted review</span></header>
             <dl>
               <div><dt>Execution mode</dt><dd>{data.agentic.mode}</dd></div>
               <div><dt>Model</dt><dd>{data.agentic.model_name}</dd></div>
               <div><dt>Execution record</dt><dd>{data.agentic.model_run_recorded ? "Present — redacted metadata only" : "Not recorded"}</dd></div>
               <div><dt>Tool steps retained</dt><dd>{data.agentic.bounded_tool_step_count}</dd></div>
             </dl>
-            <p>The agent investigates and proposes a next question. Deterministic policy, staff attestation, supervisor approval, and the SIMULATED relay retain release authority.</p>
+            <p>The AI checks only policy-approved records and proposes the next private question. Policy and staff keep release authority; the relay remains SIMULATED.</p>
           </section>
 
           <section className="judge-passport-card" aria-labelledby="judge-passport-title">
-            <header><CheckCircle size={20} weight="fill" /><span id="judge-passport-title">Internal consistency check</span></header>
+            <header><CheckCircle size={20} weight="fill" /><span id="judge-passport-title">Case record integrity</span></header>
             <div className="judge-check-row"><b>{data.passport.hash_chain_valid ? "Hash chain valid" : "Hash chain unavailable"}</b><span>{data.passport.event_count} application events</span></div>
             <dl>
               <div><dt>Manifest</dt><dd>{data.passport.manifest_id}</dd></div>
@@ -92,7 +92,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
           </section>
 
           <section className="judge-timeline" aria-labelledby="judge-timeline-title">
-            <header><strong id="judge-timeline-title">Redacted custody timeline</strong><span>Read-only service projection</span></header>
+            <header><strong id="judge-timeline-title">What happened</strong><span>Safe public summary</span></header>
             <ol>
               {data.timeline.map((event) => (
                 <li key={`${event.sequence}-${event.event_hash}`}>
@@ -106,7 +106,7 @@ export function JudgeWalkthrough({ connection, walkthrough, onRefresh }) {
         </main>
       )}
 
-      <footer className="judge-footer"><span className={`connection-${connection.status}`}><CloudCheck size={14} weight="fill" /> {connection.label}</span><span>The protected workflow remains separate from this read-only projection.</span></footer>
+      <footer className="judge-footer"><span className={`connection-${connection.status}`}><CloudCheck size={14} weight="fill" /> {connection.label}</span><span>Private evidence and staff actions stay protected.</span></footer>
     </div>
   );
 }

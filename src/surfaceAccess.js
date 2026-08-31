@@ -27,7 +27,7 @@ export function chromePolicyFor(view) {
     showStaffIdentity: staff,
     showReset: staff,
     scopeLabel: view === "walkthrough"
-      ? "Public judge walkthrough · read-only synthetic case"
+      ? "Public case view · read-only sample case"
       : view === "claimant"
       ? "Private claimant link · no staff access"
       : view === "relay"

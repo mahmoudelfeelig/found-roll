@@ -113,7 +113,7 @@ test("public, claimant, and relay chrome policies expose no staff menu, identity
     assert.equal(policy.showReset, false);
     assert.match(
       policy.scopeLabel,
-      surface === "walkthrough" ? /public judge walkthrough/i : /no staff access/i,
+      surface === "walkthrough" ? /public case view/i : /no staff access/i,
     );
   }
 });
@@ -121,7 +121,7 @@ test("public, claimant, and relay chrome policies expose no staff menu, identity
 test("the public judge surface does not imply an unpublished demo video exists", async () => {
   const walkthrough = await readFile(path.join(projectRoot, "src", "components", "JudgeWalkthrough.jsx"), "utf8");
   assert.doesNotMatch(walkthrough, /shown in the public demo video/i);
-  assert.match(walkthrough, /protected workflow remains separate from this read-only projection/i);
+  assert.match(walkthrough, /private evidence and staff actions stay protected/i);
 });
 
 test("the public judge surface does not represent redacted analyst metadata as private proof", async () => {

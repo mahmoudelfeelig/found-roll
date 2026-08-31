@@ -3,7 +3,7 @@
   "kind": "found-roll-frontend-build",
   "entrypoint": "dist/client/index.html",
   "file_count": 11,
-  "total_bytes": 2174531,
+  "total_bytes": 2174431,
   "files": [
     {
       "path": "dist/client/assets/README.md",
@@ -21,9 +21,9 @@
       "sha256": "dd62e8e2d46a13624ccf03eb7f1ecc8f58cda1e9083f65b538addb178cfab372"
     },
     {
-      "path": "dist/client/assets/index-DLjAXN7o.js",
-      "bytes": 414194,
-      "sha256": "0fede88a7ec815a18cfc3b402dacc8794ccdb8c32403486b75e4cd8f38713d31"
+      "path": "dist/client/assets/index-DD3L49f9.js",
+      "bytes": 414094,
+      "sha256": "7a72dcfa8e6a0dcb15d1f7d69f4988446629c2826ed0ac5de81c0f0cae9f328f"
     },
     {
       "path": "dist/client/assets/northport-intake.jpg",
@@ -48,7 +48,7 @@
     {
       "path": "dist/client/index.html",
       "bytes": 563,
-      "sha256": "7f0503c11b639153c01d1e39a348f2fccde13bfde36b19165c1a6ee43d037d81"
+      "sha256": "9d48861c2d11f164015c8058c9e6c73e14ec171fc7a5fe0d0b9a83704eef649a"
     },
     {
       "path": "dist/client/legal/FOUND-ROLL-LICENSE.txt",

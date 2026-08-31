@@ -35,7 +35,7 @@ function ViewPicker({ view, setView }) {
 
 export function WindowChrome({ view, setView, onRefresh, onSignOut, busy = false, authenticated = false }) {
   const title = view === "walkthrough"
-    ? "Judge Walkthrough"
+    ? "Public Case View"
     : view === "staff"
       ? "Staff Workspace"
       : view === "claimant"
