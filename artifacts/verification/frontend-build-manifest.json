@@ -3,7 +3,7 @@
   "kind": "found-roll-frontend-build",
   "entrypoint": "dist/client/index.html",
   "file_count": 12,
-  "total_bytes": 2563414,
+  "total_bytes": 2563464,
   "files": [
     {
       "path": "dist/client/assets/README.md",
@@ -16,14 +16,14 @@
       "sha256": "e5f8f907e9fcc2e21415b41218faea6ef11f783827aa6409aaba32defb6e64ed"
     },
     {
-      "path": "dist/client/assets/index-CfxhpD1R.css",
-      "bytes": 32718,
-      "sha256": "454df6482a14cacde35f2fc5802652905151c13d4df79c71a02c10d4004942ec"
+      "path": "dist/client/assets/index-B7jyMgtS.js",
+      "bytes": 403384,
+      "sha256": "437903ad38512e0e6dc4eca6d7bfe7c924df6ebb13e1ef60731cb580eae6d5f6"
     },
     {
-      "path": "dist/client/assets/index-D0Pxd-V2.js",
-      "bytes": 403374,
-      "sha256": "f948e767d67548ead5022df079ed0bd8ef7943ebdbf7fb6e80fc48b8b1801863"
+      "path": "dist/client/assets/index-D4dxNr-a.css",
+      "bytes": 32758,
+      "sha256": "878185163723bceb0b55f3f78cadd80b00f7c8650ce9222c93205108302e77c3"
     },
     {
       "path": "dist/client/assets/northport-intake.jpg",
@@ -53,7 +53,7 @@
     {
       "path": "dist/client/index.html",
       "bytes": 563,
-      "sha256": "00bba83133f579ebb117638082a965588dc51274bf9dd1d32c1833d8e9321ea3"
+      "sha256": "e33aaf81935503796721d1368907caf9eb13fd631e03920da267481467815ccb"
     },
     {
       "path": "dist/client/legal/FOUND-ROLL-LICENSE.txt",

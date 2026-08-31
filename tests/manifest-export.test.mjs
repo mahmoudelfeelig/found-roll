@@ -101,3 +101,9 @@ test("the toolbar exposes a functional manifest export only for closed cases", a
   );
   assert.equal((workspaceSource.match(/label="Export Manifest"/g) || []).length, 1);
 });
+
+test("photo-tray ornaments are not exposed as inert controls", async () => {
+  const workspaceSource = await readFile(new URL("../src/components/StaffWorkspace.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(workspaceSource, /<button[^>]+className="tray-arrow"/);
+  assert.equal((workspaceSource.match(/<span className="tray-arrow" aria-hidden="true">/g) || []).length, 2);
+});

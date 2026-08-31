@@ -11,7 +11,7 @@
   },
   "failed_count": 0,
   "fixture_count": 15,
-  "generated_at": "2026-08-31T03:25:41.075756+00:00",
+  "generated_at": "2026-08-31T04:31:52.658611+00:00",
   "live_only_requirements": [
     "Live gemini-3.5-flash invocation through Vertex AI",
     "Google ADK tool trajectory and trace receipt",

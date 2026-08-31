@@ -800,10 +800,12 @@ button.tree-row {
 .tray-arrow {
   width: 22px;
   flex: 0 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: transparent;
   color: #81878d;
-  cursor: pointer;
 }
 
 .tray-photo {

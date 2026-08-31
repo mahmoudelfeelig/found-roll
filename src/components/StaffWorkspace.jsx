@@ -283,7 +283,7 @@ function PhotoTray({ items, fixture, demo }) {
     <section className="photo-tray">
       <header>PHOTO TRAY <span>(selected item & related evidence)</span></header>
       <div className="tray-content">
-        <button type="button" className="tray-arrow"><CaretLeft size={20} weight="bold" /></button>
+        <span className="tray-arrow" aria-hidden="true"><CaretLeft size={20} weight="bold" /></span>
         {visibleItems.map((item) => item.transcript ? (
           <article className="tray-note" key={item.id}>
             <div className="note-wave" aria-hidden="true">▥▥▤▥▥▤▥▤▥▥▤▥</div>
@@ -299,7 +299,7 @@ function PhotoTray({ items, fixture, demo }) {
         ))}
         {!visibleItems.length && <p className="empty-tray-note">No staff-authorized evidence bytes are loaded for case {demo.caseId}.</p>}
         {!fixture && visibleItems.length > 0 && <article className="tray-note"><strong>Imported intake</strong><p>{demo.authoritativeCase?.public_description || "Staff evidence accepted for bounded analysis."}</p></article>}
-        <button type="button" className="tray-arrow"><CaretRight size={20} weight="bold" /></button>
+        <span className="tray-arrow" aria-hidden="true"><CaretRight size={20} weight="bold" /></span>
       </div>
     </section>
   );
