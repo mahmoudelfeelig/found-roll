@@ -157,12 +157,11 @@ async function assertNoHorizontalOverflow(label) {
 async function inspectJudgeViewport(width, height, name) {
   await page.setViewportSize({ width, height });
   await go("/?view=walkthrough");
-  await page.getByRole("heading", { name: "Inspect the redacted completed case" }).waitFor();
+  await page.getByRole("heading", { name: "See how this lost-item case was resolved" }).waitFor();
   await confirmImagesLoaded(`judge ${width}x${height}`);
-  await page.getByRole("button", { name: /Refresh live record/ }).waitFor();
   await assertNoHorizontalOverflow(`judge ${width}x${height}`);
   const criticalBounds = await page.evaluate(() => {
-    const selectors = [".judge-intro", ".judge-refresh", ".judge-grid", ".judge-footer"];
+    const selectors = [".judge-intro", ".judge-story", ".judge-footer"];
     return selectors.map((selector) => {
       const element = document.querySelector(selector);
       const rect = element?.getBoundingClientRect();
@@ -193,10 +192,10 @@ if (!liveMode) {
 
 try {
   await go("/");
-  await page.getByRole("heading", { name: "Inspect the redacted completed case" }).waitFor();
+  await page.getByRole("heading", { name: "See how this lost-item case was resolved" }).waitFor();
   await confirmImagesLoaded("public root");
-  recordAssertion("public root identifies the Judge Walkthrough", await page.getByText("PUBLIC · READ-ONLY", { exact: true }).isVisible());
-  recordAssertion("public root has a working read-only refresh", await page.getByRole("button", { name: "Refresh live record" }).isEnabled());
+  recordAssertion("public root identifies the completed case story", await page.getByText("COMPLETED CASE STORY · READ-ONLY", { exact: true }).isVisible());
+  recordAssertion("public root exposes no pretend controls", await page.getByRole("button").count() === 0);
   recordAssertion("public root has no password controls", await page.locator('input[type="password"]').count() === 0);
   recordAssertion("public root has no staff menu", await page.getByText("Authenticated staff", { exact: false }).count() === 0);
   recordAssertion("public root has no protected mutation CTA", await page.getByRole("button", { name: /Issue & Open Separate Claimant Link|Create passport & analyze|Approve Valuable Item/ }).count() === 0);
@@ -212,11 +211,6 @@ try {
   }
   await screenshot("judge-1440x960.png");
 
-  const beforeRefreshCount = report.apiRequests.filter((request) => request.path === "/api/v1/judge-walkthrough").length;
-  await page.getByRole("button", { name: "Refresh live record" }).click();
-  await page.waitForTimeout(100);
-  const afterRefreshCount = report.apiRequests.filter((request) => request.path === "/api/v1/judge-walkthrough").length;
-  recordAssertion("judge refresh uses its public read-only endpoint", afterRefreshCount > beforeRefreshCount);
   const protectedRequest = report.apiRequests.some((request) => request.method !== "GET" || !["/api/v1/healthz", "/api/v1/judge-walkthrough"].includes(request.path));
   recordAssertion("judge surface made no protected or mutating API request", !protectedRequest, report.apiRequests);
 

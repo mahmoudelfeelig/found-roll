@@ -219,7 +219,7 @@ export function App() {
   };
 
   const screen = view === "walkthrough"
-    ? <JudgeWalkthrough connection={connection} walkthrough={judgeWalkthrough} onRefresh={refreshJudgeWalkthrough} />
+    ? <JudgeWalkthrough connection={connection} walkthrough={judgeWalkthrough} />
     : view === "claimant"
     ? <ClaimantPortal {...screenProps} />
     : view === "relay"
