@@ -831,6 +831,18 @@ class _QueuedPublisher:
         return {"queued": True, "mode": "cloud_tasks", "task_name": outbox.task_name}
 
 
+class _FailOnceAnalysisRequestRepository(InMemoryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def apply_mutation(self, spec, **kwargs):
+        if spec.event_type == "ANALYSIS_REQUESTED" and not self.failed:
+            self.failed = True
+            raise RuntimeError("synthetic crash between analysis mutations")
+        return super().apply_mutation(spec, **kwargs)
+
+
 def test_cloud_task_retry_receipt_keeps_the_publisher_contract_without_payload():
     settings = Settings(tasks_mode="cloud")
     publisher = _QueuedPublisher()
@@ -844,6 +856,10 @@ def test_cloud_task_retry_receipt_keeps_the_publisher_contract_without_payload()
             f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
             json={"expected_version": 1, "idempotency_key": "cloud-receipt-retry-001"},
         )
+        altered = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 0, "idempotency_key": "cloud-receipt-retry-001"},
+        )
 
     assert first.status_code == 200
     assert retry.status_code == 200
@@ -851,7 +867,62 @@ def test_cloud_task_retry_receipt_keeps_the_publisher_contract_without_payload()
     assert retry.json()["task"]["mode"] == "cloud_tasks"
     assert retry.json()["task"]["queued"] is True
     assert "payload" not in retry.json()["task"]
+    assert altered.status_code == 409
+    assert altered.json()["error"]["code"] == "stale_case_version"
     assert publisher.calls == 1
+
+
+def test_exact_analysis_retry_recovers_the_intermediate_evidence_ready_state():
+    settings = Settings(tasks_mode="cloud")
+    publisher = _QueuedPublisher()
+    repository = _FailOnceAnalysisRequestRepository()
+    app = create_app(settings=settings, repository=repository, task_publisher=publisher)
+    with TestClient(app) as client:
+        interrupted_response = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 1, "idempotency_key": "analysis-crash-retry-001"},
+        )
+        interrupted = repository.get_case(DEMO_CASE_ID)
+        unrelated = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 1, "idempotency_key": "analysis-crash-other-001"},
+        )
+        recovered = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 1, "idempotency_key": "analysis-crash-retry-001"},
+        )
+
+    assert interrupted_response.status_code == 500
+    assert interrupted.state == CustodyState.EVIDENCE_READY
+    assert interrupted.version == 2
+    assert unrelated.status_code == 409, unrelated.text
+    assert unrelated.json()["error"]["code"] == "stale_case_version"
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["case"]["state"] == "ANALYZING"
+    assert publisher.calls == 1
+
+
+def test_new_analysis_command_with_stale_version_cannot_join_inflight_work():
+    settings = Settings(tasks_mode="cloud")
+    publisher = _QueuedPublisher()
+    app = create_app(settings=settings, task_publisher=publisher)
+    with TestClient(app) as client:
+        winner = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 1, "idempotency_key": "contention-winner-001"},
+        )
+        loser = client.post(
+            f"/api/v1/passports/{DEMO_CASE_ID}/analysis-jobs",
+            json={"expected_version": 1, "idempotency_key": "contention-loser-001"},
+        )
+        events = client.get(f"/api/v1/passports/{DEMO_CASE_ID}/events").json()["items"]
+
+    assert winner.status_code == 200, winner.text
+    assert loser.status_code == 409, loser.text
+    assert loser.json()["error"]["code"] == "stale_case_version"
+    assert publisher.calls == 1
+    assert [event["type"] for event in events].count("EVIDENCE_PACKET_READY") == 1
+    assert [event["type"] for event in events].count("ANALYSIS_REQUESTED") == 1
 
 
 def test_failed_publication_can_be_reconciled_once_with_admin_auth(settings):

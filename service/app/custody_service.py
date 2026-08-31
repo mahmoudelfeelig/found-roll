@@ -384,12 +384,24 @@ class CustodyService:
     def begin_analysis(self, case_id: str, *, expected_version: int, idempotency_key: str) -> dict:
         case = self.repository.get_case(case_id)
         base_key = f"case:{case_id}:analysis:{idempotency_key}"
+        replay_event_suffix = {
+            CustodyState.EVIDENCE_READY: "evidence-ready",
+            CustodyState.ANALYZING: "analyzing",
+        }.get(case.state)
+        exact_inflight_replay = (
+            expected_version == 1
+            and replay_event_suffix is not None
+            and any(
+                event.idempotency_key == f"{base_key}:{replay_event_suffix}"
+                for event in self.repository.list_events(case_id)
+            )
+        )
+        if case.version != expected_version and not exact_inflight_replay:
+            raise Conflict(
+                "stale_case_version",
+                f"Expected Item Passport version {expected_version}; current version is {case.version}.",
+            )
         if case.state == CustodyState.RECEIVED:
-            if case.version != expected_version:
-                raise Conflict(
-                    "stale_case_version",
-                    f"Expected Item Passport version {expected_version}; current version is {case.version}.",
-                )
             evidence_refs = self._analysis_evidence_refs(case_id)
             is_fixture = any(reference.startswith("fixture://") for reference in evidence_refs)
             self._mutation(
